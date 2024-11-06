@@ -1,0 +1,8 @@
+{
+    "scale_id": "your-actual-scale-id",
+    "customer_id": "your-actual-customer-id",
+    "vendor_id": "your-actual-vendor-id",
+    "api_key": "your-actual-api-key",
+    "signing_key": "your-actual-signing-key",
+    "api_url": "https://your-actual-api-endpoint.com/measurements"
+}
