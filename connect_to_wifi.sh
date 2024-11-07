@@ -1,10 +1,23 @@
 #!/bin/bash
 
-# Check if script is run as root
-if [ "$EUID" -ne 0 ]; then 
-    echo "Please run as root"
-    exit 1
-fi
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Function to print status messages
+print_status() {
+    echo -e "${YELLOW}>>> $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
 
 # Function to show usage
 usage() {
@@ -30,105 +43,102 @@ fi
 
 # Check if interface exists
 if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
-    echo "Interface $INTERFACE does not exist"
+    print_error "Interface $INTERFACE does not exist"
     exit 1
 fi
 
-echo "Setting up WiFi connection..."
-echo "Interface: $INTERFACE"
-echo "SSID: $SSID"
+print_status "Setting up WiFi connection..."
+print_status "Interface: $INTERFACE"
+print_status "SSID: $SSID"
 
-# Clean up existing connections
-echo "Cleaning up existing connections..."
-killall wpa_supplicant 2>/dev/null
-rm -f /run/wpa_supplicant/* 2>/dev/null
+# Clean up existing connection for specific interface only
+print_status "Running cleanup..."
+pid=$(pgrep -f "wpa_supplicant.*${INTERFACE}")
+if [ ! -z "$pid" ]; then
+    kill "$pid" || true
+    sleep 2
+fi
+
+# Remove control interface for specific interface only
+rm -f "/run/wpa_supplicant/${INTERFACE}" || true
+sleep 1
+
+# Bring interface down
 ip link set "$INTERFACE" down
+sleep 1
 
-# Create wpa_supplicant configuration
-echo "Generating wpa_supplicant configuration..."
-CONFIG_FILE="/etc/wpa_supplicant/wpa_supplicant-$INTERFACE.conf"
+# Generate wpa_supplicant configuration
+print_status "Generating wpa_supplicant configuration..."
+CONFIG_FILE="/etc/wpa_supplicant/wpa_supplicant-${INTERFACE}.conf"
 
 # Generate configuration with wpa_passphrase
-wpa_passphrase "$SSID" "$PASSWORD" > "$CONFIG_FILE"
+cat > "$CONFIG_FILE" << EOL
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+country=US
+update_config=1
 
-# Add control interface configuration
-sed -i '1i ctrl_interface=/run/wpa_supplicant\nupdate_config=1\n' "$CONFIG_FILE"
+network={
+    ssid="$SSID"
+    scan_ssid=1
+    key_mgmt=WPA-PSK
+    psk="$PASSWORD"
+    priority=1
+}
+EOL
 
-# Set proper permissions
 chmod 600 "$CONFIG_FILE"
 
 # Bring interface up
 ip link set "$INTERFACE" up
+sleep 1
 
-# Start wpa_supplicant
-echo "Starting wpa_supplicant..."
+# Start wpa_supplicant specifically for this interface
+print_status "Starting wpa_supplicant..."
 wpa_supplicant -B -i "$INTERFACE" -c "$CONFIG_FILE"
 
 if [ $? -ne 0 ]; then
-    echo "Failed to start wpa_supplicant"
+    print_error "Failed to start wpa_supplicant"
+    # Clean up on failure
+    rm -f "/run/wpa_supplicant/${INTERFACE}"
     exit 1
 fi
+
+# Wait for connection
+print_status "Waiting for connection..."
+max_attempts=15
+attempt=0
+
+while [ $attempt -lt $max_attempts ]; do
+    if iw "$INTERFACE" link | grep -q "Connected to"; then
+        break
+    fi
+    echo -n "."
+    sleep 1
+    attempt=$((attempt + 1))
+done
+echo
 
 # Get IP address
-echo "Requesting IP address..."
+print_status "Requesting IP address..."
 dhclient -v "$INTERFACE"
 
-# Wait for IP assignment
-echo "Waiting for IP assignment..."
-sleep 5
-
-# Get the IP address and subnet
-IP_ADDR=$(ip addr show "$INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
-SUBNET=$(ip addr show "$INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f2)
-
-if [ -z "$IP_ADDR" ]; then
-    echo "Failed to get IP address"
-    exit 1
-fi
-
-# Extract network portion of IP for gateway
-NETWORK=$(echo "$IP_ADDR" | cut -d. -f1-3)
-GATEWAY="$NETWORK.1"
-
-# Add default gateway
-echo "Setting up default gateway..."
-# Remove existing default route if it exists
-ip route del default 2>/dev/null
-ip route add default via "$GATEWAY" dev "$INTERFACE"
-
 # Verify connection
-echo "Verifying connection..."
-sleep 2
-
 if iw "$INTERFACE" link | grep -q "Connected to"; then
-    echo "Successfully connected to $SSID"
+    print_success "Successfully connected to $SSID"
     echo "Connection details:"
     iw "$INTERFACE" link
     echo "IP Configuration:"
     ip addr show "$INTERFACE" | grep "inet "
-    echo "Routing table:"
-    ip route show
-    echo "Testing internet connectivity..."
+    
+    # Test internet connectivity
     if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-        echo "Internet connection successful!"
+        print_success "Internet connection successful"
     else
-        echo "Warning: Connected to WiFi but no internet access"
-        echo "Verify your router's internet connection"
+        echo -e "${YELLOW}Warning: Connected to WiFi but no internet access${NC}"
     fi
 else
-    echo "Failed to connect to $SSID"
+    print_error "Failed to connect to $SSID"
+    # Clean up on failure
+    rm -f "/run/wpa_supplicant/${INTERFACE}"
     exit 1
-fi
-
-# Add persistent route configuration
-# This ensures the route persists across network manager restarts
-if [ -d "/etc/NetworkManager/dispatcher.d" ]; then
-    echo "Adding persistent route configuration for NetworkManager..."
-    cat > "/etc/NetworkManager/dispatcher.d/02-add-default-route" << EOL
-#!/bin/bash
-if [ "\$2" = "up" ]; then
-    ip route add default via $GATEWAY dev $INTERFACE || true
-fi
-EOL
-    chmod +x "/etc/NetworkManager/dispatcher.d/02-add-default-route"
 fi

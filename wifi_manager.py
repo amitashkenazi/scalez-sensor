@@ -11,6 +11,7 @@ from typing import List, Dict, Tuple
 # Constants
 LOG_PATH = '/var/log/scale-reader/web.log'
 WPA_SUPPLICANT_PATH = '/etc/wpa_supplicant/wpa_supplicant.conf'
+CONFIG_PATH = '/etc/scale-reader/config.json'
 
 # Configure logging
 logging.basicConfig(
@@ -93,9 +94,16 @@ TEMPLATE = """
             padding: 10px 20px;
             border-radius: 4px;
             cursor: pointer;
+            margin-right: 10px;
         }
         button:hover {
             background: #0056b3;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
         }
         .signal-strength {
             float: right;
@@ -109,11 +117,32 @@ TEMPLATE = """
             text-align: center;
             margin: 20px 0;
         }
+        .config-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .config-info h3 {
+            margin-top: 0;
+        }
+        .config-item {
+            margin: 10px 0;
+        }
+        .config-label {
+            font-weight: bold;
+            margin-right: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Scale WiFi Setup</h1>
+        
+        <div class="config-info">
+            <h3>Scale Configuration</h3>
+            <div id="config-details">Loading configuration...</div>
+        </div>
         
         <div id="status" class="status">
             Checking connection status...
@@ -121,6 +150,10 @@ TEMPLATE = """
 
         <button id="refresh-button" onclick="refreshNetworks()">
             Refresh Networks
+        </button>
+        
+        <button id="disconnect-button" onclick="disconnectWifi()" class="danger">
+            Disconnect WiFi
         </button>
 
         <div id="loading">Scanning networks...</div>
@@ -149,6 +182,19 @@ TEMPLATE = """
     </div>
 
     <script>
+        function updateConfig() {
+            fetch('/api/config')
+                .then(response => response.json())
+                .then(data => {
+                    const configDiv = document.getElementById('config-details');
+                    let configHtml = '';
+                    for (const [key, value] of Object.entries(data)) {
+                        configHtml += `<div class="config-item"><span class="config-label">${key}:</span>${value}</div>`;
+                    }
+                    configDiv.innerHTML = configHtml;
+                });
+        }
+
         function updateStatus() {
             fetch('/api/status')
                 .then(response => response.json())
@@ -160,6 +206,23 @@ TEMPLATE = """
                     } else {
                         statusDiv.className = 'status disconnected';
                         statusDiv.innerHTML = 'Not connected to any network';
+                    }
+                });
+        }
+
+        function disconnectWifi() {
+            if (!confirm('Are you sure you want to disconnect from WiFi?')) {
+                return;
+            }
+            
+            fetch('/api/disconnect')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Successfully disconnected from WiFi');
+                        setTimeout(updateStatus, 2000);
+                    } else {
+                        alert('Failed to disconnect: ' + data.error);
                     }
                 });
         }
@@ -216,7 +279,7 @@ TEMPLATE = """
                 if (data.success) {
                     alert('Connection successful! The device will now connect to the new network.');
                     hideForm();
-                    setTimeout(updateStatus, 5000);  // Update status after 5 seconds
+                    setTimeout(updateStatus, 5000);
                 } else {
                     alert('Connection failed: ' + data.error);
                 }
@@ -227,6 +290,7 @@ TEMPLATE = """
 
         // Initial load
         updateStatus();
+        updateConfig();
         refreshNetworks();
         
         // Update status every 10 seconds
@@ -235,6 +299,19 @@ TEMPLATE = """
 </body>
 </html>
 """
+
+def get_config() -> Dict[str, str]:
+    """Get scale configuration"""
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            config = json.load(f)
+            # Remove sensitive information
+            if 'id_token' in config:
+                del config['id_token']
+            return config
+    except Exception as e:
+        logging.error(f"Error reading config: {e}")
+        return {}
 
 def scan_networks() -> List[Dict[str, str]]:
     """Scan for available WiFi networks"""
@@ -278,121 +355,17 @@ def scan_networks() -> List[Dict[str, str]]:
         logging.error(f"Error scanning networks: {e}")
         return []
 
-def connect_to_network(ssid: str, password: str) -> Tuple[bool, str]:
-    """Connect to a WiFi network"""
-    try:
-        logging.info(f"Attempting to connect to network: {ssid}")
-        
-        # Normalize the SSID - convert special characters to their ASCII representation
-        normalized_ssid = ssid.encode('ascii', 'replace').decode('ascii')
-        logging.info(f"Normalized SSID: {normalized_ssid}")
-        
-        # Create wpa_supplicant configuration with a single network
-        wpa_config = f"""
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=US
 
-network={{
-    ssid="{ssid}"
-    psk="{password}"
-    key_mgmt=WPA-PSK
-    priority=1
-    scan_ssid=1
-}}
-"""
-        # Write configuration
-        logging.info("Writing new wpa_supplicant configuration")
-        with open(WPA_SUPPLICANT_PATH, 'w') as f:
-            f.write(wpa_config)
-        
-        # Set proper permissions
-        os.chmod(WPA_SUPPLICANT_PATH, 0o600)
-        logging.info("Updated wpa_supplicant permissions")
-        
-        # Force wpa_supplicant to reload configuration
-        logging.info("Reconfiguring wpa_supplicant...")
-        try:
-            # Try to reconfigure first
-            subprocess.run(['wpa_cli', '-i', 'wlan0', 'reconfigure'], check=True)
-            logging.info("wpa_supplicant reconfigured")
-        except subprocess.CalledProcessError:
-            # If reconfigure fails, restart the service
-            logging.info("Reconfigure failed, restarting wpa_supplicant service...")
-            subprocess.run(['systemctl', 'restart', 'wpa_supplicant'], check=True)
-            logging.info("Restarted wpa_supplicant service")
-        
-        # Reset interface
-        logging.info("Resetting wireless interface...")
-        subprocess.run(['ip', 'link', 'set', 'wlan0', 'down'], check=True)
-        time.sleep(2)
-        subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], check=True)
-        
-        # Wait for connection
-        logging.info("Waiting for connection to establish...")
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            time.sleep(5)
-            connected, current_ssid, ip = get_wifi_status()
-            logging.info(f"Connection check {attempt + 1}/{max_attempts}: "
-                        f"Connected={connected}, SSID={current_ssid}, IP={ip}")
-            
-            if connected:
-                if current_ssid == ssid:
-                    logging.info(f"Successfully connected to {ssid} with IP {ip}")
-                    return True, ""
-                else:
-                    logging.warning(f"Connected to different network: {current_ssid}")
-            
-            if attempt < max_attempts - 1:
-                logging.info("Retrying connection...")
-                subprocess.run(['wpa_cli', '-i', 'wlan0', 'reconnect'], check=True)
-        
-        error_msg = f"Failed to connect to {ssid} after {max_attempts} attempts"
-        logging.error(error_msg)
-        return False, error_msg
-        
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Command failed: {e.cmd}. Return code: {e.returncode}"
-        logging.error(error_msg)
-        return False, error_msg
-    except Exception as e:
-        logging.error(f"Error connecting to network: {str(e)}")
-        return False, str(e)
-
-def get_wifi_status() -> Tuple[bool, str, str]:
-    """Get current WiFi connection status with improved SSID handling"""
-    try:
-        # Get connection info
-        result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            ssid = result.stdout.strip()
-            # Get IP address
-            ip_result = subprocess.run(
-                ['ip', 'addr', 'show', 'wlan0'], 
-                capture_output=True, 
-                text=True
-            )
-            ip_address = "Unknown"
-            for line in ip_result.stdout.split('\n'):
-                if 'inet ' in line:
-                    ip_address = line.split()[1].split('/')[0]
-                    break
-            
-            # Additional debug logging
-            logging.info(f"Current connection - SSID: {ssid}, IP: {ip_address}")
-            return True, ssid, ip_address
-            
-        logging.info("No current WiFi connection detected")
-        return False, "", ""
-    except Exception as e:
-        logging.error(f"Error getting WiFi status: {e}")
-        return False, "", ""
     
 @app.route('/')
 def index():
     """Serve the main page"""
     return render_template_string(TEMPLATE)
+
+@app.route('/api/config')
+def config():
+    """Get scale configuration"""
+    return jsonify(get_config())
 
 @app.route('/api/status')
 def status():
@@ -423,9 +396,110 @@ def connect():
         'error': error
     })
 
+@app.route('/api/disconnect')
+def disconnect():
+    """Disconnect from current network"""
+    success, error = disconnect_wifi()
+
+    return jsonify({
+            'success': success,
+            'error': error
+        })
+
+
+def connect_to_network(ssid: str, password: str) -> Tuple[bool, str]:
+    """Connect to a WiFi network while maintaining AP"""
+    try:
+        logging.info(f"Attempting to connect to network: {ssid}")
+        
+        # First disconnect from any existing client connection
+        # but preserve the AP interface
+        result = subprocess.run(
+            ['sudo', '/bin/bash', '/usr/local/bin/wifi-disconnect.sh', '-i', 'wlan0'],
+            capture_output=True,
+            text=True
+        )
+        time.sleep(2)
+        
+        # Connect using the script on wlan0 interface
+        result = subprocess.run(
+            ['sudo', '/bin/bash', '/usr/local/bin/connect_to_wifi.sh',
+             '-i', 'wlan0',
+             '-s', ssid,
+             '-p', password],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            logging.info(f"Successfully connected to {ssid}")
+            return True, ""
+        else:
+            error_msg = f"Failed to connect: {result.stderr}"
+            logging.error(error_msg)
+            return False, error_msg
+            
+    except Exception as e:
+        error_msg = f"Error connecting to network: {str(e)}"
+        logging.error(error_msg)
+        return False, error_msg
+
+def disconnect_wifi() -> Tuple[bool, str]:
+    """Disconnect from WiFi network while maintaining AP"""
+    try:
+        # Only disconnect wlan0, leaving uap0 (AP interface) untouched
+        result = subprocess.run(
+            ['sudo', '/bin/bash', '/usr/local/bin/wifi-disconnect.sh', '-i', 'wlan0'],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr
+    except Exception as e:
+        logging.error(f"Error disconnecting WiFi: {e}")
+        return False, str(e)
+
+def get_wifi_status() -> Tuple[bool, str, str]:
+    """Get current WiFi connection status (client connection only)"""
+    try:
+        # Get connection info specifically for wlan0 interface
+        result = subprocess.run(
+            ['iwgetid', 'wlan0', '-r'], 
+            capture_output=True, 
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            ssid = result.stdout.strip()
+            # Get IP address for wlan0
+            ip_result = subprocess.run(
+                ['ip', 'addr', 'show', 'wlan0'], 
+                capture_output=True, 
+                text=True
+            )
+            ip_address = "Unknown"
+            for line in ip_result.stdout.split('\n'):
+                if 'inet ' in line:
+                    ip_address = line.split()[1].split('/')[0]
+                    break
+            
+            logging.info(f"Current connection - SSID: {ssid}, IP: {ip_address}")
+            return True, ssid, ip_address
+            
+        logging.info("No current WiFi connection detected")
+        return False, "", ""
+    except Exception as e:
+        logging.error(f"Error getting WiFi status: {e}")
+        return False, "", ""
+
 if __name__ == '__main__':
     # Ensure the log directory exists
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     
     # Run the server on all interfaces
     app.run(host='0.0.0.0', port=80)
+
+
+  
