@@ -1,0 +1,1 @@
+sudo tail -f /var/log/scale-reader/scale.log

@@ -73,6 +73,29 @@ fi
 echo "Requesting IP address..."
 dhclient -v "$INTERFACE"
 
+# Wait for IP assignment
+echo "Waiting for IP assignment..."
+sleep 5
+
+# Get the IP address and subnet
+IP_ADDR=$(ip addr show "$INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+SUBNET=$(ip addr show "$INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f2)
+
+if [ -z "$IP_ADDR" ]; then
+    echo "Failed to get IP address"
+    exit 1
+fi
+
+# Extract network portion of IP for gateway
+NETWORK=$(echo "$IP_ADDR" | cut -d. -f1-3)
+GATEWAY="$NETWORK.1"
+
+# Add default gateway
+echo "Setting up default gateway..."
+# Remove existing default route if it exists
+ip route del default 2>/dev/null
+ip route add default via "$GATEWAY" dev "$INTERFACE"
+
 # Verify connection
 echo "Verifying connection..."
 sleep 2
@@ -81,14 +104,31 @@ if iw "$INTERFACE" link | grep -q "Connected to"; then
     echo "Successfully connected to $SSID"
     echo "Connection details:"
     iw "$INTERFACE" link
+    echo "IP Configuration:"
     ip addr show "$INTERFACE" | grep "inet "
+    echo "Routing table:"
+    ip route show
     echo "Testing internet connectivity..."
     if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
         echo "Internet connection successful!"
     else
         echo "Warning: Connected to WiFi but no internet access"
+        echo "Verify your router's internet connection"
     fi
 else
     echo "Failed to connect to $SSID"
     exit 1
+fi
+
+# Add persistent route configuration
+# This ensures the route persists across network manager restarts
+if [ -d "/etc/NetworkManager/dispatcher.d" ]; then
+    echo "Adding persistent route configuration for NetworkManager..."
+    cat > "/etc/NetworkManager/dispatcher.d/02-add-default-route" << EOL
+#!/bin/bash
+if [ "\$2" = "up" ]; then
+    ip route add default via $GATEWAY dev $INTERFACE || true
+fi
+EOL
+    chmod +x "/etc/NetworkManager/dispatcher.d/02-add-default-route"
 fi
