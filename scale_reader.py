@@ -30,12 +30,11 @@ def setup_logging():
     """Configure logging"""
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     
-    # Configure logging with utf-8 encoding
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(LOG_PATH, encoding='utf-8'),
+            logging.FileHandler(LOG_PATH),
             logging.StreamHandler(sys.stdout)
         ]
     )
@@ -47,8 +46,36 @@ def setup_logging():
     logging.info("="*50)
 
 class ScaleConfig:
-    # ScaleConfig class remains unchanged
-    pass
+    """Configuration handler for scale reader"""
+    def __init__(self, config_path: str = CONFIG_PATH):
+        self.config_path = config_path
+        self.data = self._load_config()
+    
+    def _load_config(self) -> dict:
+        try:
+            if not os.path.exists(self.config_path):
+                raise FileNotFoundError(f"Config file not found at {self.config_path}")
+            
+            with open(self.config_path, 'r') as f:
+                config = json.load(f)
+            
+            required_fields = [
+                'scale_id',
+                'serial_port', 
+                'baud_rate',
+                'iot_endpoint'
+            ]
+            
+            missing = [field for field in required_fields if field not in config]
+            if missing:
+                raise ValueError(f"Missing required config fields: {missing}")
+            
+            return config
+                
+        except Exception as e:
+            logging.error(f"Failed to load config: {e}")
+            logging.error(traceback.format_exc())
+            sys.exit(1)
 
 class ScaleReader:
     """Handles communication with the physical scale"""
@@ -56,7 +83,6 @@ class ScaleReader:
         self.port = port
         self.baud_rate = baud_rate
         self.serial = None
-        self.read_timeout = 5  # Reduced timeout since we know the pattern
 
     def __enter__(self):
         try:
@@ -91,13 +117,13 @@ class ScaleReader:
             logging.info("Clearing input buffer")
             self.serial.reset_input_buffer()
             
-            # Wait for data with timeout
+            # Read with timeout
             start_time = time.time()
-            while (time.time() - start_time) < self.read_timeout:
+            while (time.time() - start_time) < 5:  # 5 second timeout
                 if self.serial.in_waiting > 0:
                     raw_data = self.serial.readline()
                     
-                    # Log raw data in multiple formats for debugging
+                    # Log raw data for debugging
                     logging.info("=== Data Received ===")
                     logging.info(f"Raw (hex): {' '.join([f'{b:02x}' for b in raw_data])}")
                     logging.info(f"Raw (chr): {' '.join([chr(b) if 32 <= b <= 126 else '.' for b in raw_data])}")
@@ -107,7 +133,6 @@ class ScaleReader:
                         data = raw_data.decode('ascii').strip()
                         logging.info(f"Decoded data: '{data}'")
                         
-                        # Only process complete readings that start with 'wn'
                         if not data.startswith('wn'):
                             logging.debug("Skipping partial reading")
                             continue
@@ -138,9 +163,9 @@ class ScaleReader:
                         logging.error(f"Failed to decode data: {e}")
                         continue
                 
-                time.sleep(0.1)  # Short sleep to prevent CPU overuse
+                time.sleep(0.1)
             
-            logging.error(f"Timeout waiting for valid measurement after {self.read_timeout} seconds")
+            logging.error("Timeout waiting for valid measurement")
             return False, None
                 
         except Exception as e:
@@ -153,11 +178,11 @@ class IoTClient:
     def __init__(self, scale_id: str, endpoint: str):
         self.scale_id = scale_id
         self.endpoint = endpoint
-        self.mqtt_connection = self._create_mqtt_connection()
+        self.client_id = f"scale-{scale_id}"
+        self.mqtt_connection = self._create_mqtt_client()
         
-    def _create_mqtt_connection(self):
+    def _create_mqtt_client(self):
         """Create MQTT connection to AWS IoT"""
-        # Verify certificates exist
         cert_files = {
             'cert': f"{CERTS_PATH}/{CERT_FILE}",
             'key': f"{CERTS_PATH}/{PRIVATE_KEY}",
@@ -169,6 +194,7 @@ class IoTClient:
                 raise FileNotFoundError(f"Missing {name} file: {path}")
             
         logging.info(f"Using certificates from: {CERTS_PATH}")
+        logging.info(f"Using client ID: {self.client_id}")
         
         event_loop_group = io.EventLoopGroup(1)
         host_resolver = io.DefaultHostResolver(event_loop_group)
@@ -180,7 +206,7 @@ class IoTClient:
             pri_key_filepath=cert_files['key'],
             client_bootstrap=client_bootstrap,
             ca_filepath=cert_files['root'],
-            client_id=f"scale-{self.scale_id}",
+            client_id=self.client_id,
             clean_session=False,
             keep_alive_secs=30
         )
@@ -190,7 +216,7 @@ class IoTClient:
         try:
             logging.info(f"Connecting to IoT endpoint: {self.endpoint}")
             connect_future = self.mqtt_connection.connect()
-            connect_future.result()
+            connect_future.result(timeout=10)
             logging.info("Connected to AWS IoT")
             return True
         except Exception as e:
@@ -204,20 +230,24 @@ class IoTClient:
             message = {
                 'scale_id': self.scale_id,
                 'weight': float(weight),
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 'unit': 'kg'
             }
             
-            logging.debug(f"Publishing message: {message}")
+            logging.info(f"Publishing message to topic '{TOPIC}': {json.dumps(message, indent=2)}")
             
-            publish_future, _ = self.mqtt_connection.publish(
+            # Fixed: Properly handle the future result
+            future_connection = self.mqtt_connection.publish(
                 topic=TOPIC,
                 payload=json.dumps(message),
                 qos=mqtt.QoS.AT_LEAST_ONCE
             )
-            publish_future.result()
             
-            logging.info(f"Measurement published successfully: {weight}kg")
+            # Wait for the publish to complete
+            future, _ = future_connection
+            future.result(timeout=5)
+            
+            logging.info("Measurement published successfully")
             return True
             
         except Exception as e:
@@ -229,16 +259,15 @@ class IoTClient:
         """Disconnect from AWS IoT"""
         try:
             disconnect_future = self.mqtt_connection.disconnect()
-            disconnect_future.result()
+            disconnect_future.result(timeout=5)
             logging.info("Disconnected from AWS IoT")
         except Exception as e:
             logging.error(f"Error disconnecting: {e}")
             logging.error(traceback.format_exc())
-
+            
 def main():
-    """Main function to take a single measurement and upload to cloud"""
+    """Main function to take single measurement and exit"""
     try:
-        # Initialize logging
         setup_logging()
         
         # Load configuration
@@ -252,7 +281,7 @@ def main():
             sys.exit(1)
 
         try:
-            # Create scale reader and take a single measurement
+            # Take a single measurement
             with ScaleReader(config.data['serial_port'], config.data['baud_rate']) as scale:
                 logging.info("Taking single measurement...")
                 

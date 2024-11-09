@@ -406,7 +406,6 @@ def disconnect():
             'error': error
         })
 
-
 def connect_to_network(ssid: str, password: str) -> Tuple[bool, str]:
     """Connect to a WiFi network while maintaining AP"""
     try:
@@ -433,6 +432,18 @@ def connect_to_network(ssid: str, password: str) -> Tuple[bool, str]:
         
         if result.returncode == 0:
             logging.info(f"Successfully connected to {ssid}")
+            
+            # Store successful connection details
+            wifi_store_dir = '/etc/scale-reader/wifi'
+            os.makedirs(wifi_store_dir, exist_ok=True)
+            
+            with open(f'{wifi_store_dir}/last_connection.conf', 'w') as f:
+                f.write(f'SSID="{ssid}"\n')
+                f.write(f'PASSWORD="{password}"\n')
+            
+            # Secure the file
+            os.chmod(f'{wifi_store_dir}/last_connection.conf', 0o600)
+            
             return True, ""
         else:
             error_msg = f"Failed to connect: {result.stderr}"
@@ -447,6 +458,12 @@ def connect_to_network(ssid: str, password: str) -> Tuple[bool, str]:
 def disconnect_wifi() -> Tuple[bool, str]:
     """Disconnect from WiFi network while maintaining AP"""
     try:
+        # Remove stored credentials
+        try:
+            os.remove('/etc/scale-reader/wifi/last_connection.conf')
+        except FileNotFoundError:
+            pass
+            
         # Only disconnect wlan0, leaving uap0 (AP interface) untouched
         result = subprocess.run(
             ['sudo', '/bin/bash', '/usr/local/bin/wifi-disconnect.sh', '-i', 'wlan0'],
@@ -460,7 +477,7 @@ def disconnect_wifi() -> Tuple[bool, str]:
     except Exception as e:
         logging.error(f"Error disconnecting WiFi: {e}")
         return False, str(e)
-
+    
 def get_wifi_status() -> Tuple[bool, str, str]:
     """Get current WiFi connection status (client connection only)"""
     try:

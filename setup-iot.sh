@@ -75,7 +75,8 @@ print_status "Installing Python packages in virtual environment..."
 /opt/scale-reader/venv/bin/pip install \
     awsiotsdk \
     pyserial \
-    boto3
+    boto3 \
+    psutil
 
 check_status "Python package installation"
 
@@ -86,8 +87,17 @@ chmod +x /usr/local/bin/scale_reader.py
 
 check_status "Scale reader script installation"
 
-# Create systemd service
-print_status "Creating systemd service..."
+# Install cloud control script
+print_status "Installing cloud control script..."
+cp cloud_control.py /opt/scale-reader/
+chmod +x /opt/scale-reader/cloud_control.py
+
+check_status "Cloud control script installation"
+
+# Create systemd services
+print_status "Creating systemd services..."
+
+# Scale reader service
 cat > /etc/systemd/system/scale-reader.service << EOL
 [Unit]
 Description=Scale Reader Service
@@ -103,6 +113,28 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/scale-reader/venv/lib/python3.9/site-packages
 Environment=PATH=/opt/scale-reader/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/usr/local/bin
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+# Cloud control service
+cat > /etc/systemd/system/cloud-control.service << EOL
+[Unit]
+Description=Cloud Control Service
+After=network.target
+Wants=scale-reader.service
+
+[Service]
+Type=simple
+ExecStart=/opt/scale-reader/venv/bin/python3 /opt/scale-reader/cloud_control.py
+Restart=always
+RestartSec=10
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/scale-reader/venv/lib/python3.9/site-packages
+Environment=PATH=/opt/scale-reader/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/opt/scale-reader
 
 [Install]
 WantedBy=multi-user.target
@@ -135,16 +167,19 @@ check_status "udev rule creation"
 # Set proper permissions
 print_status "Setting permissions..."
 chmod 644 /etc/systemd/system/scale-reader.service
+chmod 644 /etc/systemd/system/cloud-control.service
 chmod 600 /etc/scale-reader/config.json
 chmod -R 755 /var/log/scale-reader
 chmod -R 755 /opt/scale-reader
 touch /var/log/scale-reader/scale.log
+touch /var/log/scale-reader/cloud-control.log
 chmod 644 /var/log/scale-reader/scale.log
+chmod 644 /var/log/scale-reader/cloud-control.log
 
 # Set up log rotation
 print_status "Setting up log rotation..."
 cat > /etc/logrotate.d/scale-reader << EOL
-/var/log/scale-reader/scale.log {
+/var/log/scale-reader/scale.log /var/log/scale-reader/cloud-control.log {
     daily
     rotate 7
     compress
@@ -168,28 +203,46 @@ print_status "Creating helper scripts..."
 # Create log viewer script
 cat > /usr/local/bin/scale-logs << EOL
 #!/bin/bash
-sudo journalctl -u scale-reader -f
+case "\$1" in
+    scale)
+        sudo journalctl -u scale-reader -f
+        ;;
+    cloud)
+        sudo journalctl -u cloud-control -f
+        ;;
+    *)
+        echo "Usage: \$0 {scale|cloud}"
+        exit 1
+esac
 EOL
 
 # Create service control script
 cat > /usr/local/bin/scale-service << EOL
 #!/bin/bash
-case "\$1" in
-    start)
-        sudo systemctl start scale-reader
+SERVICE=\$1
+ACTION=\$2
+
+case "\$SERVICE" in
+    scale)
+        SERVICE_NAME="scale-reader"
         ;;
-    stop)
-        sudo systemctl stop scale-reader
-        ;;
-    restart)
-        sudo systemctl restart scale-reader
-        ;;
-    status)
-        sudo systemctl status scale-reader
+    cloud)
+        SERVICE_NAME="cloud-control"
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status}"
+        echo "Usage: \$0 {scale|cloud} {start|stop|restart|status}"
         exit 1
+        ;;
+esac
+
+case "\$ACTION" in
+    start|stop|restart|status)
+        sudo systemctl \$ACTION \$SERVICE_NAME
+        ;;
+    *)
+        echo "Usage: \$0 {scale|cloud} {start|stop|restart|status}"
+        exit 1
+        ;;
 esac
 EOL
 
@@ -198,16 +251,17 @@ chmod +x /usr/local/bin/scale-service
 
 check_status "Helper script creation"
 
-# Enable service
-print_status "Enabling service..."
+# Enable services
+print_status "Enabling services..."
 systemctl daemon-reload
 systemctl enable scale-reader.service
+systemctl enable cloud-control.service
 
 check_status "Service enablement"
 
 print_success "Setup completed successfully!"
 echo
-echo "Before starting the service, please:"
+echo "Before starting the services, please:"
 echo
 echo "1. Update the configuration in /etc/scale-reader/config.json with your values:"
 echo "   sudo nano /etc/scale-reader/config.json"
@@ -220,8 +274,8 @@ echo
 echo "3. Ensure your scale is connected via USB"
 echo
 echo "Useful commands:"
-echo "Start/stop service:     scale-service {start|stop|restart|status}"
-echo "View logs:              scale-logs"
+echo "Start/stop services:    scale-service {scale|cloud} {start|stop|restart|status}"
+echo "View logs:              scale-logs {scale|cloud}"
 echo "Edit config:            sudo nano /etc/scale-reader/config.json"
 echo "View USB devices:       ls -l /dev/ttyUSB*"
 echo
@@ -235,3 +289,4 @@ ls -l /dev/ttyUSB* 2>/dev/null || echo "No USB serial devices found yet"
 echo
 print_status "Current service status:"
 systemctl status scale-reader.service || true
+systemctl status cloud-control.service || true
