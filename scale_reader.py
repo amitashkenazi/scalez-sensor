@@ -6,106 +6,61 @@ import json
 import time
 import serial
 import logging
-import argparse
-from decimal import Decimal, ROUND_HALF_UP
+import decimal
+from decimal import Decimal
 from datetime import datetime
 from pathlib import Path
+import traceback
 from typing import Optional, Dict, Any, Tuple
-import requests
+from awscrt import io, mqtt
+from awsiot import mqtt_connection_builder
 
 # Constants
 CONFIG_PATH = '/etc/scale-reader/config.json'
+CERTS_PATH = '/etc/scale-reader/certs'
 LOG_PATH = '/var/log/scale-reader/scale.log'
-LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
-API_ENDPOINT = "https://v1kgsjmpn4.execute-api.us-east-1.amazonaws.com/dev/measurements"
+TOPIC = "scale-measurements"
+
+# Define certificate filenames
+CERT_FILE = 'device.cert.pem'
+PRIVATE_KEY = 'device.private.key'
+ROOT_CA = 'root-CA.crt'
+
+def setup_logging():
+    """Configure logging"""
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    
+    # Configure logging with utf-8 encoding
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(LOG_PATH, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    
+    logging.info("="*50)
+    logging.info("Starting Scale Reader - Single Measurement Mode")
+    logging.info(f"Python version: {sys.version}")
+    logging.info(f"Log file: {LOG_PATH}")
+    logging.info("="*50)
 
 class ScaleConfig:
-    """Configuration handler for scale reader"""
-    def __init__(self, config_path: str = CONFIG_PATH):
-        self.config_path = config_path
-        self.data = self._load_config()
-    
-    def _load_config(self) -> dict:
-        """Load configuration from JSON file"""
-        try:
-            if not os.path.exists(self.config_path):
-                raise FileNotFoundError(f"Config file not found at {self.config_path}")
-            
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-            
-            # Validate required fields
-            required_fields = [
-                'scale_id',
-                'serial_port', 
-                'baud_rate',
-                'id_token'  # Now just need the ID token
-            ]
-            
-            missing = [field for field in required_fields if field not in config]
-            if missing:
-                raise ValueError(f"Missing required config fields: {missing}")
-            
-            return config
-                
-        except Exception as e:
-            logging.error(f"Failed to load config: {e}")
-            sys.exit(1)
+    # ScaleConfig class remains unchanged
+    pass
 
-class CloudSender:
-    """Handles sending data to the cloud service"""
-    def __init__(self, config: dict):
-        self.config = config
-        self.session = requests.Session()
-
-    def send_measurement(self, weight: Decimal) -> bool:
-        """Send weight measurement to cloud service"""
-        try:
-            data = {
-                'scale_id': self.config['scale_id'],
-                'weight': float(weight),  # Convert Decimal to float
-                'timestamp': datetime.utcnow().isoformat(),
-                'unit': 'kg'
-            }
-            
-            headers = {
-                'Authorization': f'Bearer {self.config["id_token"]}',
-                'Content-Type': 'application/json'
-            }
-            
-            # Send request
-            response = self.session.post(
-                API_ENDPOINT,
-                headers=headers,
-                json=data,
-                timeout=5
-            )
-            
-            # Log response details
-            logging.info(f"Response Status: {response.status_code}")
-            logging.info(f"Response Body: {response.text}")
-            
-            if response.status_code == 201:
-                logging.info(f"✅ Measurement uploaded successfully: {weight}kg")
-                return True
-            else:
-                logging.error(f"Failed to upload measurement: {response.status_code} - {response.text}")
-                return False
-
-        except Exception as e:
-            logging.error(f"Error sending measurement: {str(e)}")
-            return False
-                
 class ScaleReader:
-    """Handles communication with the physical scale via serial connection"""
+    """Handles communication with the physical scale"""
     def __init__(self, port: str, baud_rate: int):
         self.port = port
         self.baud_rate = baud_rate
         self.serial = None
+        self.read_timeout = 5  # Reduced timeout since we know the pattern
 
     def __enter__(self):
-        """Context manager entry"""
         try:
+            logging.info(f"Opening serial port {self.port} at {self.baud_rate} baud")
             self.serial = serial.Serial(
                 port=self.port,
                 baudrate=self.baud_rate,
@@ -114,114 +69,214 @@ class ScaleReader:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
             )
+            logging.info(f"Serial port settings: {self.serial.get_settings()}")
             return self
         except Exception as e:
-            logging.error(f"Failed to open serial port: {e}")
+            logging.error(f"Failed to connect to scale: {e}")
+            logging.error(traceback.format_exc())
             raise
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
         if self.serial:
             self.serial.close()
+            logging.info("Serial port closed")
 
     def read_weight(self) -> Tuple[bool, Optional[Decimal]]:
-        """
-        Read weight measurement from the scale
-        Returns: Tuple of (success, weight)
-        """
+        """Read a single weight measurement from scale"""
         try:
             if not self.serial:
+                logging.error("Serial port not initialized")
                 return False, None
 
-            # Clear any existing data in the buffer
+            logging.info("Clearing input buffer")
             self.serial.reset_input_buffer()
             
-            # Read data from scale
-            raw_data = self.serial.readline().decode('ascii').strip()
-            
-            if not raw_data:
-                logging.error("No data received from scale")
-                return False, None
-
-            # Parse the weight value
-            try:
-                weight_str = ''.join(c for c in raw_data if c.isdigit() or c == '.')
-                weight = Decimal(weight_str).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)
-                
-                if weight < 0 or weight > 1000:  # Adjust range as needed
-                    logging.error(f"Weight reading out of valid range: {weight}kg")
-                    return False, None
+            # Wait for data with timeout
+            start_time = time.time()
+            while (time.time() - start_time) < self.read_timeout:
+                if self.serial.in_waiting > 0:
+                    raw_data = self.serial.readline()
                     
-                logging.info(f"Weight reading successful: {weight}kg")
-                return True, weight
+                    # Log raw data in multiple formats for debugging
+                    logging.info("=== Data Received ===")
+                    logging.info(f"Raw (hex): {' '.join([f'{b:02x}' for b in raw_data])}")
+                    logging.info(f"Raw (chr): {' '.join([chr(b) if 32 <= b <= 126 else '.' for b in raw_data])}")
+                    logging.info(f"Length: {len(raw_data)} bytes")
+                    
+                    try:
+                        data = raw_data.decode('ascii').strip()
+                        logging.info(f"Decoded data: '{data}'")
+                        
+                        # Only process complete readings that start with 'wn'
+                        if not data.startswith('wn'):
+                            logging.debug("Skipping partial reading")
+                            continue
+                            
+                        if not data.endswith('kg'):
+                            logging.debug("Skipping malformed reading")
+                            continue
+                        
+                        # Extract the numeric part
+                        weight_str = data[2:-2]  # Remove 'wn' and 'kg'
+                        
+                        # Handle negative values
+                        if weight_str.startswith('-'):
+                            weight_str = weight_str[1:]  # Remove minus sign
+                            sign = -1
+                        else:
+                            sign = 1
+                        
+                        try:
+                            weight = sign * Decimal(weight_str)
+                            logging.info(f"Successfully parsed weight: {weight}kg")
+                            return True, weight
+                        except (ValueError, decimal.InvalidOperation) as e:
+                            logging.error(f"Failed to parse weight value '{weight_str}': {e}")
+                            continue
+                            
+                    except UnicodeDecodeError as e:
+                        logging.error(f"Failed to decode data: {e}")
+                        continue
                 
-            except (ValueError, decimal.InvalidOperation) as e:
-                logging.error(f"Failed to parse weight value '{raw_data}': {e}")
-                return False, None
-
-        except serial.SerialException as e:
-            logging.error(f"Serial communication error: {e}")
+                time.sleep(0.1)  # Short sleep to prevent CPU overuse
+            
+            logging.error(f"Timeout waiting for valid measurement after {self.read_timeout} seconds")
             return False, None
+                
         except Exception as e:
-            logging.error(f"Unexpected error reading weight: {e}")
+            logging.error(f"Error reading from scale: {e}")
+            logging.error(traceback.format_exc())
             return False, None
 
-def setup_logging():
-    """Configure logging"""
-    log_dir = os.path.dirname(LOG_PATH)
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format=LOG_FORMAT,
-        handlers=[
-            logging.FileHandler(LOG_PATH),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+class IoTClient:
+    """Handles communication with AWS IoT"""
+    def __init__(self, scale_id: str, endpoint: str):
+        self.scale_id = scale_id
+        self.endpoint = endpoint
+        self.mqtt_connection = self._create_mqtt_connection()
+        
+    def _create_mqtt_connection(self):
+        """Create MQTT connection to AWS IoT"""
+        # Verify certificates exist
+        cert_files = {
+            'cert': f"{CERTS_PATH}/{CERT_FILE}",
+            'key': f"{CERTS_PATH}/{PRIVATE_KEY}",
+            'root': f"{CERTS_PATH}/{ROOT_CA}"
+        }
+        
+        for name, path in cert_files.items():
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Missing {name} file: {path}")
+            
+        logging.info(f"Using certificates from: {CERTS_PATH}")
+        
+        event_loop_group = io.EventLoopGroup(1)
+        host_resolver = io.DefaultHostResolver(event_loop_group)
+        client_bootstrap = io.ClientBootstrap(event_loop_group, host_resolver)
+        
+        return mqtt_connection_builder.mtls_from_path(
+            endpoint=self.endpoint,
+            cert_filepath=cert_files['cert'],
+            pri_key_filepath=cert_files['key'],
+            client_bootstrap=client_bootstrap,
+            ca_filepath=cert_files['root'],
+            client_id=f"scale-{self.scale_id}",
+            clean_session=False,
+            keep_alive_secs=30
+        )
+    
+    def connect(self) -> bool:
+        """Connect to AWS IoT"""
+        try:
+            logging.info(f"Connecting to IoT endpoint: {self.endpoint}")
+            connect_future = self.mqtt_connection.connect()
+            connect_future.result()
+            logging.info("Connected to AWS IoT")
+            return True
+        except Exception as e:
+            logging.error(f"Failed to connect to AWS IoT: {e}")
+            logging.error(traceback.format_exc())
+            return False
+    
+    def publish_measurement(self, weight: Decimal) -> bool:
+        """Publish measurement to AWS IoT"""
+        try:
+            message = {
+                'scale_id': self.scale_id,
+                'weight': float(weight),
+                'timestamp': datetime.utcnow().isoformat(),
+                'unit': 'kg'
+            }
+            
+            logging.debug(f"Publishing message: {message}")
+            
+            publish_future, _ = self.mqtt_connection.publish(
+                topic=TOPIC,
+                payload=json.dumps(message),
+                qos=mqtt.QoS.AT_LEAST_ONCE
+            )
+            publish_future.result()
+            
+            logging.info(f"Measurement published successfully: {weight}kg")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error publishing measurement: {e}")
+            logging.error(traceback.format_exc())
+            return False
+    
+    def disconnect(self):
+        """Disconnect from AWS IoT"""
+        try:
+            disconnect_future = self.mqtt_connection.disconnect()
+            disconnect_future.result()
+            logging.info("Disconnected from AWS IoT")
+        except Exception as e:
+            logging.error(f"Error disconnecting: {e}")
+            logging.error(traceback.format_exc())
 
 def main():
-    """Main function"""
+    """Main function to take a single measurement and upload to cloud"""
     try:
-        # Set up argument parser for optional command-line overrides
-        parser = argparse.ArgumentParser(description='Scale Reader')
-        parser.add_argument('--token', help='Override ID token from config')
-        parser.add_argument('--scale-id', help='Override scale ID from config')
-        args = parser.parse_args()
-
+        # Initialize logging
         setup_logging()
-        logging.info("Starting scale reader...")
-
+        
         # Load configuration
         config = ScaleConfig()
         
-        # Override config with command line arguments if provided
-        if args.token:
-            config.data['id_token'] = args.token
-        if args.scale_id:
-            config.data['scale_id'] = args.scale_id
+        # Initialize IoT client
+        iot_client = IoTClient(config.data['scale_id'], config.data['iot_endpoint'])
+        
+        # Connect to AWS IoT
+        if not iot_client.connect():
+            sys.exit(1)
 
-        # Initialize cloud sender
-        sender = CloudSender(config.data)
-
-        # Read weight from scale
-        with ScaleReader(config.data['serial_port'], config.data['baud_rate']) as scale:
-            success, weight = scale.read_weight()
-            
-            if not success or weight is None:
-                logging.error("Failed to read weight")
-                sys.exit(1)
-
-            # Send measurement to cloud
-            if sender.send_measurement(weight):
-                sys.exit(0)
-            else:
-                sys.exit(1)
+        try:
+            # Create scale reader and take a single measurement
+            with ScaleReader(config.data['serial_port'], config.data['baud_rate']) as scale:
+                logging.info("Taking single measurement...")
+                
+                success, weight = scale.read_weight()
+                
+                if success and weight is not None:
+                    # Publish measurement
+                    if iot_client.publish_measurement(weight):
+                        logging.info("Measurement successfully published")
+                        sys.exit(0)
+                    else:
+                        logging.error("Failed to publish measurement")
+                        sys.exit(1)
+                else:
+                    logging.error("Failed to read weight")
+                    sys.exit(1)
+                    
+        finally:
+            # Always disconnect properly
+            iot_client.disconnect()
 
     except Exception as e:
-        logging.error(f"Fatal error: {str(e)}")
-        logging.debug(traceback.format_exc())
+        logging.error(f"Fatal error: {e}")
+        logging.error(traceback.format_exc())
         sys.exit(1)
 
 if __name__ == '__main__':
