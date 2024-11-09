@@ -12,7 +12,7 @@ import json
 from awscrt import io, mqtt
 from awsiot import mqtt_connection_builder
 
-ENDPOINT = "alyu5ve98pej6-ats.iot.us-east-1.amazonaws.com"
+ENDPOINT = "alyu5ve98pej6.iot.us-east-1.amazonaws.com"
 CLIENT_ID = "test_connection"
 TEST_TOPIC = "test/connection"
 

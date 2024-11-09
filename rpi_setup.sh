@@ -167,7 +167,7 @@ main() {
     copy_required_files
     
     # Set up access point
-    bash /usr/local/bin/network_ap_setup.sh
+    # bash /usr/local/bin/network_ap_setup.sh
     
     # Set up WiFi client
     bash /usr/local/bin/connect_to_wifi.sh -i wlan0 -s "$WIFI_SSID" -p "$WIFI_PASSWORD"

@@ -59,7 +59,8 @@ apt-get install -y \
     udev \
     vim \
     wget \
-    curl
+    curl \
+    cron
 
 check_status "System package installation"
 
@@ -140,46 +141,107 @@ WorkingDirectory=/opt/scale-reader
 WantedBy=multi-user.target
 EOL
 
-check_status "Service creation"
+# Configure cron jobs
+print_status "Configuring cron jobs..."
 
-# Create config template if it doesn't exist
-if [ ! -f /etc/scale-reader/config.json ]; then
-    print_status "Creating configuration template..."
-    cat > /etc/scale-reader/config.json << EOL
-{
-    "scale_id": "YOUR_SCALE_ID",
-    "serial_port": "/dev/ttyUSB0",
-    "baud_rate": 1200,
-    "iot_endpoint": "YOUR_IOT_ENDPOINT"
-}
+# Create a temporary cron file
+cat > /tmp/scale_crontab << EOL
+# Scale Reader cron jobs
+# Take measurement every 5 minutes (adjust interval as needed)
+*/5 * * * * /opt/scale-reader/venv/bin/python3 /usr/local/bin/scale_reader.py
+
+# Log rotation and cleanup daily at 1 AM
+0 1 * * * find /var/log/scale-reader -name "*.log" -mtime +7 -exec rm {} \;
+
+# Monitor disk space weekly and clean up if over 80%
+0 2 * * 0 df -h / | awk '{use=$5} END{if(use>80){system("journalctl --vacuum-size=500M")}}'
 EOL
+
+# Install new cron jobs
+crontab -u root /tmp/scale_crontab
+
+# Remove temporary file
+rm /tmp/scale_crontab
+
+# Verify cron installation
+if crontab -l | grep -q "scale_reader.py"; then
+    print_success "Cron jobs installed successfully"
+else
+    print_error "Failed to install cron jobs"
 fi
 
-# Add udev rule for USB serial device
-print_status "Creating udev rule for USB serial device..."
-cat > /etc/udev/rules.d/99-usb-scale.rules << EOL
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="ttyUSB0", MODE="0666"
-ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", RUN+="/bin/systemctl restart scale-reader.service"
+# Create helper script for managing cron interval
+cat > /usr/local/bin/scale-interval << EOL
+#!/bin/bash
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_status() {
+    echo -e "\${YELLOW}>>> \$1\${NC}"
+}
+
+print_success() {
+    echo -e "\${GREEN}✓ \$1\${NC}"
+}
+
+print_error() {
+    echo -e "\${RED}✗ \$1\${NC}"
+}
+
+show_usage() {
+    echo "Usage: \$0 <minutes>"
+    echo "Example: \$0 15    # Sets interval to 15 minutes"
+    echo "Current interval: \$(crontab -l | grep 'scale_reader.py' | cut -d' ' -f1 | tr -d '*/')"
+    exit 1
+}
+
+if [ "\$1" = "-h" ] || [ "\$1" = "--help" ]; then
+    show_usage
+fi
+
+# Validate input
+if ! [[ "\$1" =~ ^[0-9]+$ ]] || [ "\$1" -lt 1 ] || [ "\$1" -gt 1440 ]; then
+    print_error "Please provide a valid interval in minutes (1-1440)"
+    show_usage
+fi
+
+# Backup existing crontab
+crontab -l > /tmp/current_crontab
+
+# Update the scale reader interval
+sed -i "/scale_reader.py/c\\*\/\$1 * * * * /opt/scale-reader/venv/bin/python3 /usr/local/bin/scale_reader.py" /tmp/current_crontab
+
+# Install updated crontab
+if crontab /tmp/current_crontab; then
+    print_success "Measurement interval updated to \$1 minutes"
+else
+    print_error "Failed to update crontab"
+fi
+
+# Cleanup
+rm /tmp/current_crontab
 EOL
 
-check_status "udev rule creation"
+# Make the helper script executable
+chmod +x /usr/local/bin/scale-interval
 
 # Set proper permissions
 print_status "Setting permissions..."
 chmod 644 /etc/systemd/system/scale-reader.service
 chmod 644 /etc/systemd/system/cloud-control.service
-chmod 600 /etc/scale-reader/config.json
 chmod -R 755 /var/log/scale-reader
 chmod -R 755 /opt/scale-reader
 touch /var/log/scale-reader/scale.log
-touch /var/log/scale-reader/cloud-control.log
 chmod 644 /var/log/scale-reader/scale.log
-chmod 644 /var/log/scale-reader/cloud-control.log
 
 # Set up log rotation
 print_status "Setting up log rotation..."
 cat > /etc/logrotate.d/scale-reader << EOL
-/var/log/scale-reader/scale.log /var/log/scale-reader/cloud-control.log {
+/var/log/scale-reader/scale.log {
     daily
     rotate 7
     compress
@@ -192,72 +254,19 @@ EOL
 
 check_status "Log rotation setup"
 
+# Create udev rule for USB serial device
+print_status "Creating udev rule for USB serial device..."
+cat > /etc/udev/rules.d/99-usb-scale.rules << EOL
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="ttyUSB0", MODE="0666"
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", RUN+="/bin/systemctl restart scale-reader.service"
+EOL
+
+check_status "udev rule creation"
+
 # Reload udev rules
 print_status "Reloading udev rules..."
 udevadm control --reload-rules
 udevadm trigger
-
-# Create helper scripts
-print_status "Creating helper scripts..."
-
-# Create log viewer script
-cat > /usr/local/bin/scale-logs << EOL
-#!/bin/bash
-case "\$1" in
-    scale)
-        sudo journalctl -u scale-reader -f
-        ;;
-    cloud)
-        sudo journalctl -u cloud-control -f
-        ;;
-    *)
-        echo "Usage: \$0 {scale|cloud}"
-        exit 1
-esac
-EOL
-
-# Create service control script
-cat > /usr/local/bin/scale-service << EOL
-#!/bin/bash
-SERVICE=\$1
-ACTION=\$2
-
-case "\$SERVICE" in
-    scale)
-        SERVICE_NAME="scale-reader"
-        ;;
-    cloud)
-        SERVICE_NAME="cloud-control"
-        ;;
-    *)
-        echo "Usage: \$0 {scale|cloud} {start|stop|restart|status}"
-        exit 1
-        ;;
-esac
-
-case "\$ACTION" in
-    start|stop|restart|status)
-        sudo systemctl \$ACTION \$SERVICE_NAME
-        ;;
-    *)
-        echo "Usage: \$0 {scale|cloud} {start|stop|restart|status}"
-        exit 1
-        ;;
-esac
-EOL
-
-chmod +x /usr/local/bin/scale-logs
-chmod +x /usr/local/bin/scale-service
-
-check_status "Helper script creation"
-
-# Enable services
-print_status "Enabling services..."
-systemctl daemon-reload
-systemctl enable scale-reader.service
-systemctl enable cloud-control.service
-
-check_status "Service enablement"
 
 print_success "Setup completed successfully!"
 echo
@@ -273,11 +282,18 @@ echo "   - root-CA.crt"
 echo
 echo "3. Ensure your scale is connected via USB"
 echo
-echo "Useful commands:"
-echo "Start/stop services:    scale-service {scale|cloud} {start|stop|restart|status}"
-echo "View logs:              scale-logs {scale|cloud}"
-echo "Edit config:            sudo nano /etc/scale-reader/config.json"
-echo "View USB devices:       ls -l /dev/ttyUSB*"
+echo "Cron Job Configuration:"
+echo "  Current measurement interval: $(crontab -l | grep 'scale_reader.py' | cut -d' ' -f1 | tr -d '*/') minutes"
+echo
+echo "To change measurement interval:"
+echo "  scale-interval <minutes>"
+echo "  Example: scale-interval 15    # Sets interval to 15 minutes"
+echo
+echo "To view cron job status:"
+echo "  grep CRON /var/log/syslog"
+echo
+echo "To view scale readings:"
+echo "  tail -f /var/log/scale-reader/scale.log"
 echo
 echo "Certificate locations:"
 echo "Config directory:       /etc/scale-reader/"
@@ -288,5 +304,4 @@ print_status "Testing USB serial port detection..."
 ls -l /dev/ttyUSB* 2>/dev/null || echo "No USB serial devices found yet"
 echo
 print_status "Current service status:"
-systemctl status scale-reader.service || true
-systemctl status cloud-control.service || true
+systemctl status scale-reader.service --no-pager || true
