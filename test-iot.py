@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 
 def test_connection(
-    endpoint="alyu5ve98pej6-ats.iot.us-east-1.amazonaws.com",
+    endpoint="alyu5ve98pej6.iot.us-east-1.amazonaws.com",
     cert_dir="/etc/scale-reader/certs",
     client_id="test-connection"
 ):
