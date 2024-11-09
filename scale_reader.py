@@ -189,6 +189,7 @@ class IoTClient:
         """Publish measurement to AWS IoT"""
         try:
             message = {
+                'measurement_id': f"{self.scale_id}-{int(time.time())}",
                 'scale_id': self.scale_id,
                 'weight': float(weight),
                 'timestamp': datetime.utcnow().isoformat() + 'Z',

@@ -213,7 +213,7 @@ After=network.target
 Type=simple
 ExecStart=/opt/scale-reader/venv/bin/python3 /usr/local/bin/scale_reader.py
 Restart=always
-RestartSec=10
+RestartSec=60
 User=root
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/usr/local/bin
@@ -233,7 +233,7 @@ Wants=scale-reader.service
 Type=simple
 ExecStart=/opt/scale-reader/venv/bin/python3 /opt/scale-reader/cloud_control.py
 Restart=always
-RestartSec=10
+RestartSec=60
 User=root
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/opt/scale-reader
