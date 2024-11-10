@@ -284,6 +284,34 @@ def disconnect():
         'error': error
     })
 
+@app.route('/api/check-certificates')
+def check_certificates():
+    """Check if all required certificates are present"""
+    try:
+        missing_certs = []
+        found_certs = []
+        
+        for cert in REQUIRED_CERTS:
+            cert_path = os.path.join(CERT_UPLOAD_DIR, cert)
+            if not os.path.exists(cert_path):
+                missing_certs.append(cert)
+            else:
+                found_certs.append(cert)
+        
+        return jsonify({
+            'success': True,
+            'complete': len(missing_certs) == 0,
+            'found': found_certs,
+            'missing': missing_certs
+        })
+    except Exception as e:
+        logging.error(f"Error checking certificates: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+    
 @app.route('/api/upload-certificates', methods=['POST'])
 def upload_certificates():
     """Handle certificate file uploads"""

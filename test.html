@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Scale Setup</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        function App() {
+            const [count, setCount] = React.useState(0);
+            
+            return (
+                <div className="p-4">
+                    <h1 className="text-2xl font-bold mb-4">React Test</h1>
+                    <p>Count: {count}</p>
+                    <button 
+                        className="mt-2 px-4 py-2 bg-blue-500 text-white rounded"
+                        onClick={() => setCount(count + 1)}
+                    >
+                        Increment
+                    </button>
+                </div>
+            );
+        }
+
+        ReactDOM.render(
+            <App />,
+            document.getElementById('root')
+        );
+    </script>
+</body>
+</html>
