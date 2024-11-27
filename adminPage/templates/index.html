@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>Scale Setup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,22 +13,27 @@
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
+            border: 3px solid rgba(255, 255, 255, .3);
             border-radius: 50%;
             border-top-color: #fff;
             animation: spin 1s ease-in-out infinite;
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
     </style>
 </head>
+
 <body>
     <div id="root"></div>
-    
+
     <script type="text/babel">
-        // InstallationManager Component
+        // Import React hooks at the top level
+        const { useState, useEffect, useRef } = React;
+
         // InstallationManager Component
         const InstallationManager = () => {
             const [logs, setLogs] = useState([]);
@@ -149,7 +155,7 @@
             return (
                 <div className="max-w-4xl mx-auto p-4 space-y-6">
                     <h2 className="text-2xl font-bold mb-4">Scale Installation</h2>
-                    
+
                     {/* Certificate Status Section */}
                     <div className="bg-white p-4 rounded-lg shadow">
                         <h3 className="text-lg font-semibold mb-2">Certificate Status</h3>
@@ -180,7 +186,7 @@
                             <div className="text-gray-600">Checking certificate status...</div>
                         )}
                     </div>
-                    
+
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div className="space-y-4">
                             <div>
@@ -194,7 +200,7 @@
                                     placeholder="Enter Scale ID"
                                 />
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium mb-1">Serial Port</label>
                                 <input
@@ -205,7 +211,7 @@
                                     className="w-full p-2 border rounded"
                                 />
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium mb-1">Baud Rate</label>
                                 <input
@@ -216,15 +222,14 @@
                                     className="w-full p-2 border rounded"
                                 />
                             </div>
-                            
+
                             <button
                                 onClick={startInstallation}
                                 disabled={installing || !certStatus.complete}
-                                className={`w-full p-2 text-white rounded ${
-                                    installing || !certStatus.complete 
-                                        ? 'bg-gray-400 cursor-not-allowed' 
+                                className={`w-full p-2 text-white rounded ${installing || !certStatus.complete
+                                        ? 'bg-gray-400 cursor-not-allowed'
                                         : 'bg-blue-500 hover:bg-blue-600'
-                                }`}
+                                    }`}
                             >
                                 {installing ? 'Installing...' : 'Start Installation'}
                             </button>
@@ -234,7 +239,7 @@
                                 </p>
                             )}
                         </div>
-                        
+
                         <div className="space-y-4">
                             {error && (
                                 <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded">
@@ -249,9 +254,8 @@
                                     logs.map((log, index) => (
                                         <div
                                             key={index}
-                                            className={`py-1 ${
-                                                log.level === 'ERROR' ? 'text-red-400' : 'text-green-400'
-                                            }`}
+                                            className={`py-1 ${log.level === 'ERROR' ? 'text-red-400' : 'text-green-400'
+                                                }`}
                                         >
                                             <span className="text-gray-500">[{log.timestamp}]</span>{' '}
                                             {log.message}
@@ -266,15 +270,212 @@
             );
         };
 
+        const ScaleMeasurements = () => {
+            const [measurements, setMeasurements] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+
+            const fetchMeasurements = async () => {
+                try {
+                    const response = await fetch('/api/measurements');
+                    if (!response.ok) {
+                        throw new Error('Failed to fetch measurements');
+                    }
+                    const data = await response.json();
+                    setMeasurements(data.measurements);
+                    setLoading(false);
+                } catch (err) {
+                    setError(err.message);
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                fetchMeasurements();
+                const interval = setInterval(fetchMeasurements, 30000);
+                return () => clearInterval(interval);
+            }, []);
+
+            if (loading) {
+                return (
+                    <div className="bg-white shadow rounded-lg p-4 mt-4">
+                        <h2 className="text-lg font-semibold mb-4">Recent Measurements</h2>
+                        <div className="flex items-center justify-center p-4">
+                            Loading measurements...
+                        </div>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="bg-white shadow rounded-lg p-4 mt-4">
+                        <h2 className="text-lg font-semibold mb-4">Recent Measurements</h2>
+                        <div className="flex items-center justify-center p-4 text-red-500">
+                            Error: {error}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-white shadow rounded-lg p-4 mt-4">
+                    <h2 className="text-lg font-semibold mb-4">Recent Measurements</h2>
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Weight</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {measurements.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={3} className="px-6 py-4 text-center text-sm text-gray-500">
+                                            No measurements available
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    measurements.map((measurement) => (
+                                        <tr key={measurement.timestamp}>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {new Date(measurement.timestamp).toLocaleString()}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {measurement.weight.toFixed(2)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {measurement.unit}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+        const SamplingControl = () => {
+            const [currentRate, setCurrentRate] = useState('loading...');
+            const [status, setStatus] = useState('');
+            const [error, setError] = useState('');
+
+            useEffect(() => {
+                fetchCurrentRate();
+            }, []);
+
+            const fetchCurrentRate = async () => {
+                try {
+                    const response = await fetch('/api/sampling-interval');
+                    const data = await response.json();
+                    if (data.success) {
+                        setCurrentRate(data.rate);
+                    } else {
+                        setError(data.error);
+                    }
+                } catch (err) {
+                    setError('Failed to fetch current sampling rate');
+                }
+            };
+
+            const setSamplingRate = async (rate) => {
+                try {
+                    setStatus('Updating sampling rate...');
+                    const response = await fetch('/api/sampling-interval', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ rate }),
+                    });
+
+                    const data = await response.json();
+                    if (data.success) {
+                        setCurrentRate(rate);
+                        setStatus(`Successfully set sampling rate to ${rate}`);
+                        setError('');
+                    } else {
+                        setError(data.error);
+                    }
+                } catch (err) {
+                    setError('Failed to update sampling rate');
+                } finally {
+                    setTimeout(() => setStatus(''), 3000);
+                }
+            };
+
+            return (
+                <div className="p-4 space-y-4 bg-white rounded-lg shadow">
+                    <h2 className="text-2xl font-bold text-gray-900">Sampling Rate Control</h2>
+
+                    <div className="flex flex-col gap-4">
+                        <div className="flex items-center gap-4">
+                            <span className="text-sm font-medium text-gray-600">Current Rate:</span>
+                            <span className="px-2 py-1 text-sm bg-gray-100 rounded text-gray-800">
+                                {currentRate}
+                            </span>
+                        </div>
+
+                        <div className="flex gap-4">
+                            <button
+                                onClick={() => setSamplingRate('FAST')}
+                                className={`px-4 py-2 text-sm font-medium rounded transition-colors ${currentRate === 'FAST'
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
+                                    }`}
+                            >
+                                FAST (1 min)
+                            </button>
+
+                            <button
+                                onClick={() => setSamplingRate('SLOW')}
+                                className={`px-4 py-2 text-sm font-medium rounded transition-colors ${currentRate === 'SLOW'
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
+                                    }`}
+                            >
+                                SLOW (30 min)
+                            </button>
+                        </div>
+
+                        {status && (
+                            <div className="p-4 bg-green-50 border border-green-200 rounded text-green-800">
+                                <p className="text-sm">{status}</p>
+                            </div>
+                        )}
+
+                        {error && (
+                            <div className="p-4 bg-red-50 border border-red-200 rounded text-red-800">
+                                <p className="text-sm">{error}</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
         // Main App Component
         const App = () => {
             const [activeTab, setActiveTab] = useState('wifi');
-            const [wifiStatus, setWifiStatus] = useState({ connected: false, ssid: '', ip: '' });
+            const [wifiStatus, setWifiStatus] = useState(null);
             const [networks, setNetworks] = useState([]);
             const [scanning, setScanning] = useState(false);
+            const [selectedNetwork, setSelectedNetwork] = useState(null);
+            const [password, setPassword] = useState('');
             const [connecting, setConnecting] = useState(false);
             const [error, setError] = useState(null);
             const [logs, setLogs] = useState([]);
+            const [config, setConfig] = useState({});
+            const [certificateStatus, setCertificateStatus] = useState(null);
+            const [fileUploadStatus, setFileUploadStatus] = useState(null);
+            const [installationStatus, setInstallationStatus] = useState(null);
+            const [scaleId, setScaleId] = useState('');
+            const [serialPort, setSerialPort] = useState('/dev/ttyUSB0');
+            const [baudRate, setBaudRate] = useState('1200');
+            const [installing, setInstalling] = useState(false);
+            const [measurements, setMeasurements] = useState([]);
 
             useEffect(() => {
                 checkStatus();
@@ -369,70 +570,81 @@
                 }
             };
 
-            const renderWiFiTab = () => (
-                <div className="space-y-6">
-                    <div className="bg-white p-6 rounded-lg shadow">
-                        <h3 className="text-lg font-semibold mb-4">WiFi Status</h3>
-                        {wifiStatus.connected ? (
-                            <div className="space-y-2">
-                                <p>Connected to: {wifiStatus.ssid}</p>
-                                <p>IP Address: {wifiStatus.ip}</p>
-                                <button
-                                    onClick={disconnectWifi}
-                                    className="mt-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-                                >
-                                    Disconnect
-                                </button>
-                            </div>
-                        ) : (
-                            <p>Not connected to any network</p>
-                        )}
-                    </div>
+            const renderWiFiTab = () => {
+                // Add a loading state while wifiStatus is null
+                if (!wifiStatus) {
+                    return (
+                        <div className="bg-white p-6 rounded-lg shadow">
+                            <h3 className="text-lg font-semibold mb-4">WiFi Status</h3>
+                            <p>Loading...</p>
+                        </div>
+                    );
+                }
 
-                    <div className="bg-white p-6 rounded-lg shadow">
-                        <h3 className="text-lg font-semibold mb-4">Available Networks</h3>
-                        <button
-                            onClick={scanNetworks}
-                            disabled={scanning}
-                            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
-                        >
-                            {scanning ? 'Scanning...' : 'Scan Networks'}
-                        </button>
-                        
-                        <div className="mt-4 space-y-2">
-                            {networks.map((network) => (
-                                <div key={network.ssid} className="flex items-center justify-between p-2 border rounded">
-                                    <div>
-                                        <span className="font-medium">{network.ssid}</span>
-                                        <span className="ml-2 text-sm text-gray-500">
-                                            Signal: {network.signal_strength}%
-                                        </span>
-                                    </div>
+                return (
+                    <div className="space-y-6">
+                        <div className="bg-white p-6 rounded-lg shadow">
+                            <h3 className="text-lg font-semibold mb-4">WiFi Status</h3>
+                            {wifiStatus.connected ? (
+                                <div className="space-y-2">
+                                    <p>Connected to: {wifiStatus.ssid}</p>
+                                    <p>IP Address: {wifiStatus.ip}</p>
                                     <button
-                                        onClick={() => {
-                                            const password = prompt(`Enter password for ${network.ssid}`);
-                                            if (password) {
-                                                connectToNetwork(network.ssid, password);
-                                            }
-                                        }}
-                                        disabled={connecting}
-                                        className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
+                                        onClick={disconnectWifi}
+                                        className="mt-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
                                     >
-                                        Connect
+                                        Disconnect
                                     </button>
                                 </div>
-                            ))}
+                            ) : (
+                                <p>Not connected to any network</p>
+                            )}
                         </div>
-                        
-                        {error && (
-                            <div className="mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
-                                {error}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
 
+                        <div className="bg-white p-6 rounded-lg shadow">
+                            <h3 className="text-lg font-semibold mb-4">Available Networks</h3>
+                            <button
+                                onClick={scanNetworks}
+                                disabled={scanning}
+                                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
+                            >
+                                {scanning ? 'Scanning...' : 'Scan Networks'}
+                            </button>
+
+                            <div className="mt-4 space-y-2">
+                                {networks.map((network) => (
+                                    <div key={network.ssid} className="flex items-center justify-between p-2 border rounded">
+                                        <div>
+                                            <span className="font-medium">{network.ssid}</span>
+                                            <span className="ml-2 text-sm text-gray-500">
+                                                Signal: {network.signal_strength}%
+                                            </span>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                const password = prompt(`Enter password for ${network.ssid}`);
+                                                if (password) {
+                                                    connectToNetwork(network.ssid, password);
+                                                }
+                                            }}
+                                            disabled={connecting}
+                                            className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
+                                        >
+                                            Connect
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {error && (
+                                <div className="mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+                                    {error}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
             const renderCertificatesTab = () => (
                 <div className="bg-white p-6 rounded-lg shadow space-y-6">
                     <h3 className="text-lg font-semibold">Upload Certificates</h3>
@@ -447,7 +659,7 @@
                         <p>Drag and drop certificate files here</p>
                         <p className="text-sm text-gray-500 mt-2">Required: device.cert.pem, device.private.key, root-CA.crt</p>
                     </div>
-                    
+
                     <div className="mt-4">
                         <input
                             type="file"
@@ -500,16 +712,16 @@
                                     { id: 'wifi', name: 'WiFi Setup' },
                                     { id: 'certs', name: 'Certificates' },
                                     { id: 'install', name: 'Installation' },
-                                    { id: 'logs', name: 'System Logs' }
+                                    { id: 'logs', name: 'System Logs' },
+                                    { id: 'measurements', name: 'Measurements' }
                                 ].map((tab) => (
                                     <button
                                         key={tab.id}
                                         onClick={() => setActiveTab(tab.id)}
-                                        className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                                            activeTab === tab.id
+                                        className={`py-4 px-1 border-b-2 font-medium text-sm ${activeTab === tab.id
                                                 ? 'border-blue-500 text-blue-600'
                                                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                        }`}
+                                            }`}
                                     >
                                         {tab.name}
                                     </button>
@@ -521,16 +733,16 @@
                         {activeTab === 'certs' && renderCertificatesTab()}
                         {activeTab === 'install' && renderInstallTab()}
                         {activeTab === 'logs' && renderLogsTab()}
+                        {activeTab === 'measurements' && <ScaleMeasurements />}
                     </div>
                 </div>
             );
         };
 
-        // Import React hooks at the top level
-        const { useState, useEffect, useRef } = React;
 
         // Mount the app
         ReactDOM.render(<App />, document.getElementById('root'));
     </script>
 </body>
+
 </html>

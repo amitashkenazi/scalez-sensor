@@ -15,9 +15,11 @@ import json
 
 # Constants
 CONFIG_PATH = '/etc/scale-reader/config.json'
-CERTS_PATH = '/etc/scale-reader/certs'
-LOG_PATH = '/var/log/scale-reader/scale.log'
-TOPIC = "scale-measurements"
+CERTS_PATH = '/home/amitash/certs'
+LOG_PATH = '/tmp/scale.log'
+STAGE = 'prod'  # This should match your deployment stage
+TOPIC = f"{STAGE}/{STAGE}/scale-measurements"  # Changed to match IoT rule
+
 
 def setup_logging():
     """Configure logging"""
@@ -50,7 +52,8 @@ class ScaleConfig:
                 'scale_id',
                 'serial_port', 
                 'baud_rate',
-                'iot_endpoint'
+                'iot_endpoint',
+                'stage'  # Add stage to required fields
             ]
             
             missing = [field for field in required_fields if field not in config]
@@ -143,13 +146,16 @@ class ScaleReader:
 
 class IoTClient:
     """Handles communication with AWS IoT"""
-    def __init__(self, scale_id: str, endpoint: str):
+    def __init__(self, scale_id: str, endpoint: str, stage: str = STAGE):
+        logging.info(f"Initializing IoT client for scale {scale_id} in stage {stage} with endpoint {endpoint}")
         self.scale_id = scale_id
         self.endpoint = endpoint
+        self.stage = stage
         self.mqtt_connection = self._create_mqtt_connection()
         
     def _create_mqtt_connection(self):
         """Create MQTT connection to AWS IoT"""
+        logging.info(f"Creating MQTT connection CERTS_PATH: {CERTS_PATH}")
         cert_files = {
             'cert': f"{CERTS_PATH}/device.cert.pem",
             'key': f"{CERTS_PATH}/device.private.key",
@@ -188,6 +194,7 @@ class IoTClient:
     def publish_measurement(self, weight: Decimal):
         """Publish measurement to AWS IoT"""
         try:
+            topic = f"{self.stage}/{self.stage}/scale-measurements"
             message = {
                 'measurement_id': f"{self.scale_id}-{int(time.time())}",
                 'scale_id': self.scale_id,
@@ -196,21 +203,24 @@ class IoTClient:
                 'unit': 'kg'
             }
             
-            logging.info(f"Publishing message: {json.dumps(message, indent=2)}")
+            logging.info(f"Publishing message to topic '{topic}': {json.dumps(message, indent=2)}")
             
             future, _ = self.mqtt_connection.publish(
-                topic=TOPIC,
+                topic=topic,
                 payload=json.dumps(message),
                 qos=mqtt.QoS.AT_LEAST_ONCE
             )
-            future.result(timeout=10)
             
-            logging.info("Measurement published successfully")
-            
+            try:
+                future.result(timeout=10)
+                logging.info("Measurement published successfully")
+            except Exception as publish_error:
+                raise Exception(f"Failed to publish: {str(publish_error)}")
+                
         except Exception as e:
             logging.error(f"Error publishing measurement: {e}")
             raise
-    
+
     def disconnect(self):
         """Disconnect from AWS IoT"""
         try:
@@ -228,12 +238,13 @@ def main():
         
         # Load configuration
         config = ScaleConfig()
-        
+        logging.info("Configuration loaded successfully")  
         # Initialize IoT client
         iot_client = IoTClient(config.data['scale_id'], config.data['iot_endpoint'])
-        
+        logging.info("IoT client initialized")
         # Connect to AWS IoT
         iot_client.connect()
+        logging.info("Connected to AWS IoT") 
         
         try:
             # Take a single measurement

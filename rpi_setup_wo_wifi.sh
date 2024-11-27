@@ -129,8 +129,8 @@ copy_required_files() {
     mkdir -p /opt/scale-reader
     
     # Copy scripts
-    cp scale_reader.py /usr/local/bin/
-    cp cloud_control.py /opt/scale-reader/
+    cp /home/amitash/scale_reader.py /usr/local/bin/
+    cp /home/amitash/cloud_control.py /opt/scale-reader/
     
     chmod +x /usr/local/bin/*.sh
     chmod +x /usr/local/bin/*.py
@@ -158,15 +158,16 @@ main() {
     
     # Create IoT configuration
     print_status "Creating IoT configuration..."
-    cat > /etc/scale-reader/config.json << EOL
+    cat > /home/amitash/config.json << EOL
 {
     "scale_id": "$SCALE_ID",
     "serial_port": "$SERIAL_PORT",
     "baud_rate": $BAUD_RATE,
-    "iot_endpoint": "$IOT_ENDPOINT"
+    "iot_endpoint": "$IOT_ENDPOINT",
+    "stage": "prod"
 }
 EOL
-    chmod 600 /etc/scale-reader/config.json
+    chmod 600 /home/amitash/config.json
     
     # Set up Python virtual environment
     print_status "Setting up Python virtual environment..."

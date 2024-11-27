@@ -15,8 +15,8 @@ import threading
 # Constants
 LOG_PATH = '/var/log/scale-reader/web.log'
 WPA_SUPPLICANT_PATH = '/etc/wpa_supplicant/wpa_supplicant.conf'
-CONFIG_PATH = '/etc/scale-reader/config.json'
-CERT_UPLOAD_DIR = '/etc/scale-reader/certs'
+CONFIG_PATH = '/home/amitash/certs/config.json'
+CERT_UPLOAD_DIR = '/home/amitash/certs'
 REQUIRED_CERTS = ['device.cert.pem', 'device.private.key', 'root-CA.crt']
 
 # Configure logging
@@ -571,6 +571,51 @@ def get_logs():
             'error': str(e)
         })
 
+@app.route('/api/measurements')
+def get_measurements():
+    """Get recent scale measurements"""
+    try:
+        # Path to scale reader log file
+        log_path = '/var/log/scale-reader/scale.log'
+        measurements = []
+        
+        if os.path.exists(log_path):
+            # Read last 50 lines of the log file
+            output = subprocess.check_output(['tail', '-n', '50', log_path])
+            lines = output.decode('utf-8').split('\n')
+            
+            # Parse log lines to find measurements
+            for line in lines:
+                if 'Publishing message:' in line:
+                    try:
+                        # Extract JSON part from the log line
+                        json_str = line.split('Publishing message:')[1].strip()
+                        data = json.loads(json_str)
+                        if all(k in data for k in ['timestamp', 'weight', 'unit']):
+                            measurements.append({
+                                'timestamp': data['timestamp'],
+                                'weight': data['weight'],
+                                'unit': data['unit']
+                            })
+                    except Exception as parse_error:
+                        logging.error(f"Error parsing measurement line: {parse_error}")
+                        continue
+        
+        # Sort measurements by timestamp, most recent first
+        measurements.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'measurements': measurements[:10]  # Return only the 10 most recent
+        })
+        
+    except Exception as e:
+        logging.error(f"Error getting measurements: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+    
 if __name__ == '__main__':
     try:
         # Ensure log directory exists

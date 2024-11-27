@@ -8,12 +8,7 @@ import psutil
 import socket
 import logging
 import subprocess
-from typing import Dict, Any
 from datetime import datetime
-from pathlib import Path
-import threading
-from queue import Queue
-from decimal import Decimal
 from awscrt import io, mqtt
 from awsiot import mqtt_connection_builder
 
@@ -21,54 +16,44 @@ from awsiot import mqtt_connection_builder
 CONFIG_PATH = '/etc/scale-reader/config.json'
 CERTS_PATH = '/etc/scale-reader/certs'
 LOG_PATH = '/var/log/scale-reader/cloud-control.log'
-
-# MQTT Topics - simplified to match serverless.yml
-TOPIC_MEASUREMENTS = "scale-measurements"
+COMMANDS_TOPIC = "scale-commands"  # Topic for receiving commands
+STATUS_TOPIC = "scale-status"      # Topic for sending status updates
 
 def setup_logging():
     """Configure logging"""
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+        format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(LOG_PATH, encoding='utf-8'),
+            logging.FileHandler(LOG_PATH),
             logging.StreamHandler(sys.stdout)
         ]
     )
 
 class CloudControl:
-    def __init__(self, config_path: str = CONFIG_PATH):
-        self.config_path = config_path
+    def __init__(self):
         self.config = self._load_config()
         self.scale_id = self.config['scale_id']
-        self.command_queue = Queue()
-        
-        # Configure client ID to match policy
         self.client_id = f"scale-{self.scale_id}"
-        
-        # Initialize MQTT client
         self._verify_certificates()
         self.mqtt = self._create_mqtt_client()
-
-    def _load_config(self) -> dict:
+        
+    def _load_config(self):
         """Load and validate configuration"""
         try:
-            if not os.path.exists(self.config_path):
-                raise FileNotFoundError(f"Config file not found at {self.config_path}")
+            if not os.path.exists(CONFIG_PATH):
+                raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
             
-            with open(self.config_path, 'r') as f:
+            with open(CONFIG_PATH, 'r') as f:
                 config = json.load(f)
             
-            required_fields = ['scale_id', 'serial_port', 'baud_rate', 'iot_endpoint']
+            required_fields = ['scale_id', 'iot_endpoint']
             missing = [field for field in required_fields if field not in config]
             
             if missing:
                 raise ValueError(f"Missing required config fields: {missing}")
-                
-            if config['scale_id'] == 'YOUR_SCALE_ID':
-                raise ValueError("Please configure scale_id in config.json")
             
-            logging.info(f"Loaded config: {json.dumps(config, indent=2)}")
             return config
             
         except Exception as e:
@@ -86,20 +71,12 @@ class CloudControl:
         for name, path in cert_files.items():
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Missing {name} certificate: {path}")
-            
-            # Check file permissions
-            stat = os.stat(path)
-            if stat.st_mode & 0o777 != 0o600:
-                logging.warning(f"Insecure permissions on {name} certificate. Setting to 600")
-                os.chmod(path, 0o600)
-            
+        
         logging.info("All certificates verified")
 
     def _create_mqtt_client(self):
         """Create MQTT connection with AWS IoT"""
         try:
-            logging.info(f"Creating MQTT client for endpoint: {self.config['iot_endpoint']}")
-            
             event_loop_group = io.EventLoopGroup(1)
             host_resolver = io.DefaultHostResolver(event_loop_group)
             client_bootstrap = io.ClientBootstrap(event_loop_group, host_resolver)
@@ -115,58 +92,83 @@ class CloudControl:
                 keep_alive_secs=30
             )
             
-            logging.info(f"MQTT client created successfully with client ID: {self.client_id}")
             return mqtt_client
             
         except Exception as e:
             logging.error(f"Failed to create MQTT client: {e}")
             raise
 
-    def collect_system_metrics(self) -> Dict[str, Any]:
-        """Collect system metrics"""
-        metrics = {
-            'scale_id': self.scale_id,
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
-            'cpu': {
-                'percent': psutil.cpu_percent(),
-                'temperature': self._get_cpu_temperature()
-            },
-            'memory': {
-                'total': psutil.virtual_memory().total,
-                'available': psutil.virtual_memory().available,
-                'percent': psutil.virtual_memory().percent
-            },
-            'disk': {
-                'total': psutil.disk_usage('/').total,
-                'free': psutil.disk_usage('/').free,
-                'percent': psutil.disk_usage('/').percent
-            },
-            'network': {
-                'hostname': socket.gethostname(),
-                'ip': self._get_ip_address()
-            },
-            'uptime': self._get_uptime()
-        }
-        return metrics
-
-    def _get_cpu_temperature(self) -> float:
+    def handle_command(self, topic, payload, **kwargs):
+        """Handle incoming commands"""
         try:
-            temp = subprocess.check_output(['vcgencmd', 'measure_temp'])
-            return float(temp.decode('utf-8').replace('temp=', '').replace('\'C\n', ''))
-        except:
-            return 0.0
-
-    def _get_ip_address(self) -> str:
+            payload_text = payload.decode('utf-8')
+            command = json.loads(payload_text)
+            logging.info(f"Received command: {command}")
+            
+            if 'action' in command:
+                if command['action'] == 'set_sampling_rate':
+                    self._handle_sampling_rate(command)
+                else:
+                    logging.warning(f"Unknown command action: {command['action']}")
+                    
+        except Exception as e:
+            logging.error(f"Error handling command: {e}")
+    
+    def _handle_sampling_rate(self, command):
+        """Handle sampling rate change command"""
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-        except:
-            return "unknown"
-
-    def _get_uptime(self) -> float:
-        return psutil.boot_time()
-
+            if 'rate' not in command:
+                raise ValueError("Missing 'rate' parameter")
+                
+            rate = command['rate'].upper()
+            if rate not in ['FAST', 'SLOW']:
+                raise ValueError("Rate must be 'FAST' or 'SLOW'")
+                
+            # Convert rate to minutes
+            minutes = 1 if rate == 'FAST' else 30
+            
+            # Update crontab
+            result = subprocess.run(
+                ['/usr/local/bin/scale-interval', str(minutes)],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                logging.info(f"Successfully set sampling rate to {rate} ({minutes} minutes)")
+                self._publish_status({
+                    'status': 'success',
+                    'message': f"Sampling rate set to {rate}",
+                    'sampling_rate': rate,
+                    'interval_minutes': minutes
+                })
+            else:
+                raise Exception(f"Failed to update sampling rate: {result.stderr}")
+                
+        except Exception as e:
+            error_msg = f"Error setting sampling rate: {str(e)}"
+            logging.error(error_msg)
+            self._publish_status({
+                'status': 'error',
+                'message': error_msg
+            })
+    
+    def _publish_status(self, status_data):
+        """Publish status update to AWS IoT"""
+        try:
+            status_data.update({
+                'scale_id': self.scale_id,
+                'timestamp': datetime.utcnow().isoformat() + 'Z'
+            })
+            
+            self.mqtt.publish(
+                topic=STATUS_TOPIC,
+                payload=json.dumps(status_data),
+                qos=mqtt.QoS.AT_LEAST_ONCE
+            )
+        except Exception as e:
+            logging.error(f"Error publishing status: {e}")
+    
     def run(self):
         """Main run loop"""
         while True:  # Outer loop for reconnection
@@ -176,73 +178,32 @@ class CloudControl:
                 connect_future = self.mqtt.connect()
                 connect_future.result(timeout=10)
                 logging.info("Connected to AWS IoT Core")
-
+                
+                # Subscribe to commands
+                subscribe_future, _ = self.mqtt.subscribe(
+                    topic=f"{COMMANDS_TOPIC}/{self.scale_id}",
+                    qos=mqtt.QoS.AT_LEAST_ONCE,
+                    callback=self.handle_command
+                )
+                subscribe_future.result(timeout=10)
+                logging.info(f"Subscribed to {COMMANDS_TOPIC}/{self.scale_id}")
+                
                 # Main loop
                 while True:
-                    try:
-                        # Collect and publish metrics
-                        metrics = self.collect_system_metrics()
-                        
-                        # Only send essential metrics to measurements topic
-                        measurement = {
-                            'scale_id': metrics['scale_id'],
-                            'weight': 0.0,  # This would be replaced with actual weight
-                            'timestamp': metrics['timestamp'],
-                            'unit': 'kg'
-                        }
-                        
-                        logging.info(f"Publishing measurement: {json.dumps(measurement, indent=2)}")
-                        
-                        try:
-                            # Publish with timeout
-                            publish_future = self.mqtt.publish(
-                                topic=TOPIC_MEASUREMENTS,
-                                payload=json.dumps(measurement),
-                                qos=mqtt.QoS.AT_LEAST_ONCE
-                            )
-                            publish_future[0].result(timeout=5)
-                            logging.info("Published measurement successfully")
-                        except Exception as publish_error:
-                            logging.error(f"Failed to publish measurement: {str(publish_error)}")
-                            # If publish fails, break inner loop to trigger reconnection
-                            raise
-                        
-                        # Wait before next update
-                        time.sleep(60)
-                        
-                    except Exception as loop_error:
-                        logging.error(f"Error in main loop: {str(loop_error)}")
-                        # Break inner loop to trigger reconnection
-                        break
-                        
+                    time.sleep(60)  # Wake up every minute to check connection
+                    
             except Exception as e:
-                logging.error(f"Fatal error in connection loop: {str(e)}")
-                
-            finally:
-                try:
-                    logging.info("Disconnecting from AWS IoT Core...")
-                    disconnect_future = self.mqtt.disconnect()
-                    disconnect_future.result(timeout=10)
-                    logging.info("Disconnected successfully")
-                except Exception as disconnect_error:
-                    logging.error(f"Error during disconnect: {str(disconnect_error)}")
-            
-            # Wait before attempting to reconnect
-            logging.info("Waiting 5 seconds before reconnecting...")
-            time.sleep(5)
-                        
+                logging.error(f"Error in main loop: {e}")
+                time.sleep(5)  # Wait before reconnecting
+                continue
+
 def main():
     """Main entry point"""
     try:
         setup_logging()
         logging.info("Starting Cloud Control Service")
-        
-        logging.info(f"Python version: {sys.version}")
-        logging.info(f"Working directory: {os.getcwd()}")
-        
         controller = CloudControl()
         controller.run()
-        
     except Exception as e:
         logging.error(f"Fatal error: {e}")
         sys.exit(1)

@@ -6,7 +6,7 @@ import os
 import argparse
 from botocore.exceptions import ClientError
 
-def provision_device(scale_id: str, output_dir: str, policy_name: str):
+def provision_device(scale_id: str, output_dir: str, policy_name: str, stage: str):
     """Provision a new device in AWS IoT"""
     iot = boto3.client('iot')
     
@@ -55,13 +55,15 @@ def provision_device(scale_id: str, output_dir: str, policy_name: str):
             thingName=thing_name,
             principal=cert_response['certificateArn']
         )
-        
+         
         # Save configuration
         config = {
             'scale_id': scale_id,
             'serial_port': '/dev/ttyUSB0',
             'baud_rate': 1200,
-            'iot_endpoint': iot.describe_endpoint(endpointType='iot:Data-ATS')['endpointAddress']
+            'iot_endpoint': iot.describe_endpoint(endpointType='iot:Data-ATS')['endpointAddress'],
+            'stage': stage
+
         }
         
         with open(f"{output_dir}/config.json", 'w') as f:
@@ -82,9 +84,11 @@ def main():
                        help='Directory to store certificates')
     parser.add_argument('--policy-name', default='scale-management-system-scale-policy-dev',
                        help='IoT policy name to attach')
+    parser.add_argument('--stage', default='dev',
+                       help='Deployment stage')
     
     args = parser.parse_args()
-    provision_device(args.scale_id, args.output_dir, args.policy_name)
+    provision_device(args.scale_id, args.output_dir, args.policy_name, args.stage)
 
 if __name__ == '__main__':
     main()

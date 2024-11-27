@@ -77,6 +77,7 @@ print_status "Copying adminPage files..."
 cp -r ./adminPage/static/* /usr/local/bin/static/
 cp -r ./adminPage/templates/* /usr/local/bin/templates/
 cp ./adminPage/wifi_manager.py /usr/local/bin/
+cp ./adminPage/installationManager.jsx /usr/local/bin/static/components/
 cp ./rpi_setup_wo_wifi.sh /usr/local/bin/
 
 # Copy WiFi utility scripts
