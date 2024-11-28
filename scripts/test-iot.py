@@ -43,6 +43,9 @@ def test_connection(
     try:
         logging.info(f"Starting connection test to {endpoint}")
         logging.info(f"Using client ID: {client_id}")
+        logging.info(f"cert: {cert_dir}/device.cert.pe")
+        logging.info(f"key: {cert_dir}/device.private.key")
+        logging.info(f"root: {cert_dir}/root-CA.crt")
         
         # Certificate verification
         cert_files = {

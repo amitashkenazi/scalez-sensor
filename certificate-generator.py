@@ -60,7 +60,7 @@ def provision_device(scale_id: str, output_dir: str, policy_name: str, stage: st
         config = {
             'scale_id': scale_id,
             'serial_port': '/dev/ttyUSB0',
-            'baud_rate': 1200,
+            'baud_rate': 9600,
             'iot_endpoint': iot.describe_endpoint(endpointType='iot:Data-ATS')['endpointAddress'],
             'stage': stage
 
@@ -85,7 +85,7 @@ def main():
     parser.add_argument('--policy-name', default='scale-management-system-scale-policy-dev',
                        help='IoT policy name to attach')
     parser.add_argument('--stage', default='dev',
-                       help='Deployment stage')
+                       help='Deployment stage'
     
     args = parser.parse_args()
     provision_device(args.scale_id, args.output_dir, args.policy_name, args.stage)

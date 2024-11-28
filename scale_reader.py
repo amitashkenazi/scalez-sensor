@@ -14,7 +14,7 @@ import time
 import json
 
 # Constants
-CONFIG_PATH = '/etc/scale-reader/config.json'
+CONFIG_PATH = '/home/amitash/certs/config.json'
 CERTS_PATH = '/home/amitash/certs'
 LOG_PATH = '/tmp/scale.log'
 STAGE = 'prod'  # This should match your deployment stage
@@ -42,6 +42,7 @@ class ScaleConfig:
     
     def _load_config(self) -> dict:
         try:
+            logging.info(f"Loading configuration from {self.config_path}")
             if not os.path.exists(self.config_path):
                 raise FileNotFoundError(f"Config file not found at {self.config_path}")
             
@@ -79,7 +80,7 @@ class ScaleReader:
             self.serial = serial.Serial(
                 port=self.port,
                 baudrate=self.baud_rate,
-                timeout=2,  # Increased timeout
+                timeout=2,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
@@ -121,17 +122,21 @@ class ScaleReader:
                         data = raw_data.decode('ascii').strip()
                         logging.info(f"Decoded data: '{data}'")
                         
-                        if data.startswith('wn') and data.endswith('kg'):
-                            # Extract the numeric part
-                            weight_str = data[2:-2]  # Remove 'wn' and 'kg'
+                        # Updated parsing logic for 'sg' prefix format
+                        if data.startswith('sg') and data.endswith('kg'):
+                            # Extract the numeric part, removing 'sg' prefix and 'kg' suffix
+                            weight_str = data[2:-2]  # Remove 'sg' and 'kg'
                             
-                            # Handle negative values
+                            # Handle negative values if present
                             sign = -1 if weight_str.startswith('-') else 1
                             weight_str = weight_str[1:] if sign == -1 else weight_str
                             
+                            # Convert to Decimal
                             weight = sign * Decimal(weight_str)
                             logging.info(f"Successfully parsed weight: {weight}kg")
                             return weight
+                        else:
+                            logging.warning(f"Received data in unexpected format: {data}")
                     except Exception as decode_error:
                         logging.error(f"Error decoding data: {decode_error}")
                         
@@ -143,7 +148,7 @@ class ScaleReader:
         except Exception as e:
             logging.error(f"Error reading from scale: {e}")
             raise
-
+        
 class IoTClient:
     """Handles communication with AWS IoT"""
     def __init__(self, scale_id: str, endpoint: str, stage: str = STAGE):
@@ -240,6 +245,7 @@ def main():
         config = ScaleConfig()
         logging.info("Configuration loaded successfully")  
         # Initialize IoT client
+        logging.info(f"endpoint: {config.data['iot_endpoint']}")
         iot_client = IoTClient(config.data['scale_id'], config.data['iot_endpoint'])
         logging.info("IoT client initialized")
         # Connect to AWS IoT
