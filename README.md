@@ -4,7 +4,7 @@
 Copy the scripts and the admin page to the Raspberry Pi (RPI) using the `scp` command:
 
 ```sh
-scp -r adminPage network_ap_setup.sh rpi_setup_wo_wifi.sh cloud_control.py scale_reader.py connect_to_wifi.sh wifi-disconnect.sh setup_wifi_manager.sh amitash@192.168.86.24:/home/amitash/
+scp -r adminPage network_ap_setup.sh set_scale_interval.py set_scale_interval.py rpi_setup_wo_wifi.sh cloud_control.py scale_reader.py connect_to_wifi.sh wifi-disconnect.sh setup_wifi_manager.sh amitash@192.168.86.24:/home/amitash/
 ```
 
 Run the following commands on the RPI:

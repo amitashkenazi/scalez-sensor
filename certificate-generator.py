@@ -60,7 +60,7 @@ def provision_device(scale_id: str, output_dir: str, policy_name: str, stage: st
         config = {
             'scale_id': scale_id,
             'serial_port': '/dev/ttyUSB0',
-            'baud_rate': 9600,
+            'baud_rate': 1200,
             'iot_endpoint': iot.describe_endpoint(endpointType='iot:Data-ATS')['endpointAddress'],
             'stage': stage
 

@@ -73,6 +73,7 @@ def get_config() -> Dict[str, str]:
         with open(CONFIG_PATH, 'r') as f:
             config = json.load(f)
             # Remove sensitive information
+            logging.info(f"Configuration read successfully: {config}")
             if 'id_token' in config:
                 del config['id_token']
             return config
@@ -284,6 +285,67 @@ def disconnect():
         'error': error
     })
 
+@app.route('/api/sampling-interval', methods=['GET', 'POST'])
+def sampling_interval():
+    """Get or set sampling interval"""
+    try:
+        if request.method == 'GET':
+            # Read current interval config
+            try:
+                with open('/etc/scale-reader/interval.json', 'r') as f:
+                    config = json.load(f)
+                    return jsonify({
+                        'success': True,
+                        'seconds': config['seconds'],
+                        'rate': config['interval']
+                    })
+            except FileNotFoundError:
+                return jsonify({
+                    'success': True,
+                    'seconds': 1800,
+                    'rate': 'SLOW'
+                })
+            
+        else:  # POST
+            data = request.get_json()
+            if 'rate' not in data:
+                return jsonify({
+                    'success': False,
+                    'error': 'Missing rate parameter'
+                })
+            
+            rate = data['rate'].upper()
+            if rate not in ['FAST', 'SLOW']:
+                return jsonify({
+                    'success': False,
+                    'error': 'Rate must be FAST or SLOW'
+                })
+            
+            # Run scale-interval script
+            cmd = ['--fast'] if rate == 'FAST' else ['--slow']
+            result = subprocess.run(
+                ['python', '/home/amitash/set_scale_interval.py'] + cmd,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                return jsonify({
+                    'success': True,
+                    'message': f'Sampling rate set to {rate}'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f'Failed to update interval: {result.stderr}'
+                })
+                
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+        
 @app.route('/api/check-certificates')
 def check_certificates():
     """Check if all required certificates are present"""
@@ -573,34 +635,24 @@ def get_logs():
 
 @app.route('/api/measurements')
 def get_measurements():
-    """Get recent scale measurements"""
+    """Get measurements from /tmp/measurements directory"""
     try:
-        # Path to scale reader log file
-        log_path = '/var/log/scale-reader/scale.log'
+        measurements_dir = "/tmp/measurements"
         measurements = []
-        
-        if os.path.exists(log_path):
-            # Read last 50 lines of the log file
-            output = subprocess.check_output(['tail', '-n', '50', log_path])
-            lines = output.decode('utf-8').split('\n')
-            
-            # Parse log lines to find measurements
-            for line in lines:
-                if 'Publishing message:' in line:
+
+        if os.path.exists(measurements_dir):
+            # Read all JSON files in the directory
+            for filename in sorted(os.listdir(measurements_dir), reverse=True):
+                if filename.endswith('.json'):
+                    filepath = os.path.join(measurements_dir, filename)
                     try:
-                        # Extract JSON part from the log line
-                        json_str = line.split('Publishing message:')[1].strip()
-                        data = json.loads(json_str)
-                        if all(k in data for k in ['timestamp', 'weight', 'unit']):
-                            measurements.append({
-                                'timestamp': data['timestamp'],
-                                'weight': data['weight'],
-                                'unit': data['unit']
-                            })
-                    except Exception as parse_error:
-                        logging.error(f"Error parsing measurement line: {parse_error}")
+                        with open(filepath, 'r') as f:
+                            measurement = json.load(f)
+                            measurements.append(measurement)
+                    except Exception as e:
+                        logging.error(f"Error reading measurement file {filepath}: {e}")
                         continue
-        
+
         # Sort measurements by timestamp, most recent first
         measurements.sort(key=lambda x: x['timestamp'], reverse=True)
         
@@ -615,7 +667,7 @@ def get_measurements():
             'success': False,
             'error': str(e)
         })
-    
+            
 if __name__ == '__main__':
     try:
         # Ensure log directory exists

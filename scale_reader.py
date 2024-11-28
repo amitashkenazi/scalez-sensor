@@ -68,8 +68,7 @@ class ScaleConfig:
             raise
 
 class ScaleReader:
-    """Handles communication with the physical scale"""
-    def __init__(self, port: str, baud_rate: int):
+    def __init__(self, port='/dev/tty.PL2303G-USBtoUART1110', baud_rate=1200):
         self.port = port
         self.baud_rate = baud_rate
         self.serial = None
@@ -96,16 +95,13 @@ class ScaleReader:
             logging.info("Serial port closed")
 
     def read_weight(self):
-        """Read a single weight measurement from scale"""
         try:
             if not self.serial:
                 raise Exception("Serial port not initialized")
 
-            # Clear any stale data
             self.serial.reset_input_buffer()
-            time.sleep(0.1)  # Short delay to allow new data
+            time.sleep(0.1)
             
-            # Wait for data to be available
             max_attempts = 5
             attempt = 0
             
@@ -116,37 +112,30 @@ class ScaleReader:
                     logging.info("=== Data Received ===")
                     logging.info(f"Raw (hex): {' '.join([f'{b:02x}' for b in raw_data])}")
                     logging.info(f"Raw (chr): {' '.join([chr(b) if 32 <= b <= 126 else '.' for b in raw_data])}")
-                    logging.info(f"Length: {len(raw_data)} bytes")
                     
                     try:
                         data = raw_data.decode('ascii').strip()
                         logging.info(f"Decoded data: '{data}'")
                         
-                        # Updated parsing logic for 'sg' prefix format
                         if data.startswith('sg') and data.endswith('kg'):
-                            # Extract the numeric part, removing 'sg' prefix and 'kg' suffix
-                            weight_str = data[2:-2]  # Remove 'sg' and 'kg'
-                            
-                            # Handle negative values if present
+                            weight_str = data[2:-2]
                             sign = -1 if weight_str.startswith('-') else 1
                             weight_str = weight_str[1:] if sign == -1 else weight_str
-                            
-                            # Convert to Decimal
                             weight = sign * Decimal(weight_str)
-                            logging.info(f"Successfully parsed weight: {weight}kg")
+                            logging.info(f"Parsed weight: {weight}kg")
                             return weight
                         else:
-                            logging.warning(f"Received data in unexpected format: {data}")
+                            logging.warning(f"Unexpected format: {data}")
                     except Exception as decode_error:
-                        logging.error(f"Error decoding data: {decode_error}")
+                        logging.error(f"Decoding error: {decode_error}")
                         
                 attempt += 1
-                time.sleep(0.5)  # Wait for more data
+                time.sleep(0.5)
                 
-            raise Exception("No valid weight data received from scale")
+            raise Exception("No valid weight data received")
                 
         except Exception as e:
-            logging.error(f"Error reading from scale: {e}")
+            logging.error(f"Read error: {e}")
             raise
         
 class IoTClient:
@@ -196,6 +185,25 @@ class IoTClient:
             logging.error(f"Failed to connect to AWS IoT: {e}")
             raise
     
+    
+    def save_measurement(self, weight, timestamp, uploaded=False):
+        """Save measurement to local file"""
+        measurement = {
+            "weight": float(weight),
+            "timestamp": timestamp,
+            "unit": "kg",
+            "uploaded": uploaded
+        }
+        
+        # Create directory if it doesn't exist
+        os.makedirs("/tmp/measurements", exist_ok=True)
+        
+        # Save measurement with timestamp as filename
+        filename = f"/tmp/measurements/{timestamp.replace(':', '-')}.json"
+        with open(filename, 'w') as f:
+            json.dump(measurement, f)
+            
+            
     def publish_measurement(self, weight: Decimal):
         """Publish measurement to AWS IoT"""
         try:
@@ -219,7 +227,9 @@ class IoTClient:
             try:
                 future.result(timeout=10)
                 logging.info("Measurement published successfully")
+                self.save_measurement(weight, message['timestamp'], uploaded=True)
             except Exception as publish_error:
+                self.save_measurement(weight, message['timestamp'], uploaded=False)
                 raise Exception(f"Failed to publish: {str(publish_error)}")
                 
         except Exception as e:
@@ -234,6 +244,8 @@ class IoTClient:
             logging.info("Disconnected from AWS IoT")
         except Exception as e:
             logging.error(f"Error disconnecting: {e}")
+
+
 
 def main():
     """Main function to take single measurement and exit"""
