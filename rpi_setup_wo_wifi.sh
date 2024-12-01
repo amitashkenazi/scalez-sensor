@@ -99,8 +99,8 @@ get_config_values() {
     print_status "Enter configuration values:"
     
     # Get Scale ID
-    read -p "Enter Scale ID: " SCALE_ID
-    if [ -z "$SCALE_ID" ]; then
+    read -p "Enter Device ID: " DEVICE_ID
+    if [ -z "$DEVICE_ID" ]; then
         handle_error "Scale ID cannot be empty"
     fi
     
@@ -155,19 +155,6 @@ main() {
     
     # Set up access point
     # bash /usr/local/bin/network_ap_setup.sh
-    
-    # Create IoT configuration
-    print_status "Creating IoT configuration..."
-    cat > /home/amitash/config.json << EOL
-{
-    "scale_id": "$SCALE_ID",
-    "serial_port": "$SERIAL_PORT",
-    "baud_rate": $BAUD_RATE,
-    "iot_endpoint": "$IOT_ENDPOINT",
-    "stage": "prod"
-}
-EOL
-    chmod 600 /home/amitash/config.json
     
     # Set up Python virtual environment
     print_status "Setting up Python virtual environment..."

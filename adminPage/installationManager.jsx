@@ -5,7 +5,7 @@ const InstallationManager = () => {
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState(null);
   const [config, setConfig] = useState({
-    scale_id: '',
+    device_id: '',
     serial_port: '/dev/ttyUSB0',
     baud_rate: 1200
   });
@@ -58,7 +58,7 @@ const InstallationManager = () => {
   };
 
   const startInstallation = async () => {
-    if (!config.scale_id) {
+    if (!config.device_id) {
       setError('Scale ID is required');
       return;
     }
@@ -99,8 +99,8 @@ const InstallationManager = () => {
             <label className="block text-sm font-medium mb-1">Scale ID *</label>
             <input
               type="text"
-              name="scale_id"
-              value={config.scale_id}
+              name="device_id"
+              value={config.device_id}
               onChange={handleConfigChange}
               className="w-full p-2 border rounded"
               placeholder="Enter Scale ID"

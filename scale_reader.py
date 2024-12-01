@@ -50,7 +50,7 @@ class ScaleConfig:
                 config = json.load(f)
             
             required_fields = [
-                'scale_id',
+                'device_id',
                 'serial_port', 
                 'baud_rate',
                 'iot_endpoint',
@@ -68,10 +68,11 @@ class ScaleConfig:
             raise
 
 class ScaleReader:
-    def __init__(self, port='/dev/tty.PL2303G-USBtoUART1110', baud_rate=1200):
+    def __init__(self, device_id, port='/dev/tty.PL2303G-USBtoUART1110', baud_rate=1200):
         self.port = port
         self.baud_rate = baud_rate
         self.serial = None
+        self.device_id = device_id
 
     def __enter__(self):
         try:
@@ -94,7 +95,7 @@ class ScaleReader:
             self.serial.close()
             logging.info("Serial port closed")
 
-    def read_weight(self):
+    def read_weights(self):
         try:
             if not self.serial:
                 raise Exception("Serial port not initialized")
@@ -123,7 +124,13 @@ class ScaleReader:
                             weight_str = weight_str[1:] if sign == -1 else weight_str
                             weight = sign * Decimal(weight_str)
                             logging.info(f"Parsed weight: {weight}kg")
-                            return weight
+                            return {self.device_id+"-RS232": 
+                                {
+                                    "scale_id": "scale-1",
+                                    "wight": weight,
+                                    "type": "RS232"
+                                }
+                            }
                         else:
                             logging.warning(f"Unexpected format: {data}")
                     except Exception as decode_error:
@@ -140,9 +147,9 @@ class ScaleReader:
         
 class IoTClient:
     """Handles communication with AWS IoT"""
-    def __init__(self, scale_id: str, endpoint: str, stage: str = STAGE):
-        logging.info(f"Initializing IoT client for scale {scale_id} in stage {stage} with endpoint {endpoint}")
-        self.scale_id = scale_id
+    def __init__(self, device_id: str, endpoint: str, stage: str = STAGE):
+        logging.info(f"Initializing IoT client for scale {device_id} in stage {stage} with endpoint {endpoint}")
+        self.device_id = device_id
         self.endpoint = endpoint
         self.stage = stage
         self.mqtt_connection = self._create_mqtt_connection()
@@ -170,7 +177,7 @@ class IoTClient:
             pri_key_filepath=cert_files['key'],
             client_bootstrap=client_bootstrap,
             ca_filepath=cert_files['root'],
-            client_id=f"scale-{self.scale_id}",
+            client_id=f"device-{self.device_id}",
             clean_session=False,
             keep_alive_secs=30
         )
@@ -204,13 +211,14 @@ class IoTClient:
             json.dump(measurement, f)
             
             
-    def publish_measurement(self, weight: Decimal):
+    def publish_measurement(self, scale_id, weight: Decimal):
         """Publish measurement to AWS IoT"""
         try:
             topic = f"{self.stage}/{self.stage}/scale-measurements"
             message = {
-                'measurement_id': f"{self.scale_id}-{int(time.time())}",
-                'scale_id': self.scale_id,
+                'measurement_id': f"{scale_id}-{int(time.time())}",
+                'device_id': self.device_id,
+                'scale_id': scale_id,
                 'weight': float(weight),
                 'timestamp': datetime.utcnow().isoformat() + 'Z',
                 'unit': 'kg'
@@ -258,7 +266,7 @@ def main():
         logging.info("Configuration loaded successfully")  
         # Initialize IoT client
         logging.info(f"endpoint: {config.data['iot_endpoint']}")
-        iot_client = IoTClient(config.data['scale_id'], config.data['iot_endpoint'])
+        iot_client = IoTClient(config.data['device_id'], config.data['iot_endpoint'])
         logging.info("IoT client initialized")
         # Connect to AWS IoT
         iot_client.connect()
@@ -266,11 +274,12 @@ def main():
         
         try:
             # Take a single measurement
-            with ScaleReader(config.data['serial_port'], config.data['baud_rate']) as scale:
-                weight = scale.read_weight()
-                iot_client.publish_measurement(weight)
-                logging.info("Measurement taken and published successfully")
-                sys.exit(0)
+            with ScaleReader(config.data['device_id'], config.data['serial_port'], config.data['baud_rate']) as scale:
+                weights = scale.read_weights()
+                for scale_id, weight in weights.items():
+                    iot_client.publish_measurement(scale_id, weight["wight"])
+                    logging.info("Measurement taken and published successfully")
+                    # iot_client.publish_measurement(weight)
                 
         finally:
             iot_client.disconnect()

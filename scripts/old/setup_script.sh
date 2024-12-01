@@ -23,7 +23,7 @@ print_error() {
 usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
-    echo "  --scale-id STRING       Scale ID for the device"
+    echo "  --device-id STRING       Scale ID for the device"
     echo "  --username STRING       Username for authentication"
     echo "  --password STRING       Password for authentication"
     echo "  --serial-port STRING    Serial port for scale (default: /dev/ttyUSB0)"
@@ -38,8 +38,8 @@ BAUD_RATE=1200             # Default value
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --scale-id)
-            SCALE_ID="$2"
+        --device-id)
+            DEVICE_ID="$2"
             shift 2
             ;;
         --username)
@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required parameters
-REQUIRED_PARAMS=(SCALE_ID USERNAME PASSWORD SOURCE_DIR)
+REQUIRED_PARAMS=(DEVICE_ID USERNAME PASSWORD SOURCE_DIR)
 for param in "${REQUIRED_PARAMS[@]}"; do
     if [ -z "${!param}" ]; then
         print_error "Missing required parameter: --${param,,}"
@@ -132,7 +132,7 @@ done
 print_status "Creating configuration..."
 cat > /etc/scale-reader/config.json << EOL
 {
-    "scale_id": "$SCALE_ID",
+    "scale_id": "$DEVICE_ID",
     "serial_port": "$SERIAL_PORT",
     "baud_rate": $BAUD_RATE
 }
@@ -209,7 +209,7 @@ echo "2. Application logs:"
 echo "  tail -f /var/log/scale-reader/scale.log"
 echo "  tail -f /usr/local/bin/command_execution.log"
 echo
-echo "The scale reader service is running with scale ID: $SCALE_ID"
+echo "The scale reader service is running with scale ID: $DEVICE_ID"
 echo
 echo "To check the service status:"
 echo "  systemctl status scale-reader"

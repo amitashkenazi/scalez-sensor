@@ -32,7 +32,7 @@ class IoTTestCallbacks:
             logging.info(f"Publish succeeded for packet_id {packet_id} on topic {topic}")
 
 def test_connection(
-    endpoint="alyu5ve98pej6.iot.us-east-1.amazonaws.com",
+    endpoint="alyu5ve98pej6-ats.iot.us-east-1.amazonaws.com",
     
     cert_dir="./certs",
     client_id="test-connection"
@@ -43,7 +43,7 @@ def test_connection(
     try:
         logging.info(f"Starting connection test to {endpoint}")
         logging.info(f"Using client ID: {client_id}")
-        logging.info(f"cert: {cert_dir}/device.cert.pe")
+        logging.info(f"cert: {cert_dir}/device.cert.pem")
         logging.info(f"key: {cert_dir}/device.private.key")
         logging.info(f"root: {cert_dir}/root-CA.crt")
         

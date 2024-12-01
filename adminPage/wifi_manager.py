@@ -17,7 +17,7 @@ LOG_PATH = '/var/log/scale-reader/web.log'
 WPA_SUPPLICANT_PATH = '/etc/wpa_supplicant/wpa_supplicant.conf'
 CONFIG_PATH = '/home/amitash/certs/config.json'
 CERT_UPLOAD_DIR = '/home/amitash/certs'
-REQUIRED_CERTS = ['device.cert.pem', 'device.private.key', 'root-CA.crt']
+REQUIRED_CERTS = ['device.cert.pem', 'device.private.key', 'root-CA.crt', 'config.json']
 
 # Configure logging
 logging.basicConfig(
@@ -444,8 +444,8 @@ def install_services():
             })
         
         # Extract parameters with defaults
-        scale_id = data.get('scale_id')
-        if not scale_id:
+        device_id = data.get('device_id')
+        if not device_id:
             log_to_window("Scale ID is required", "ERROR")
             return jsonify({
                 'success': False,
@@ -458,14 +458,14 @@ def install_services():
         
         # Log configuration
         log_to_window(f"Configuration received:")
-        log_to_window(f"Scale ID: {scale_id}")
+        log_to_window(f"Scale ID: {device_id}")
         log_to_window(f"Serial Port: {serial_port}")
         log_to_window(f"Baud Rate: {baud_rate}")
         log_to_window(f"IoT Endpoint: {endpoint}")
         
         # Create temporary script to handle user input
         setup_script = f'''#!/bin/bash
-echo "{scale_id}"  # Scale ID
+echo "{device_id}"  # Scale ID
 echo "{serial_port}"  # Serial Port
 echo "{baud_rate}"  # Baud Rate
 echo "{endpoint}"  # IoT Endpoint
@@ -509,7 +509,7 @@ echo "{endpoint}"  # IoT Endpoint
         stderr_thread.start()
         
         # Write inputs to process
-        process.stdin.write(f"{scale_id}\n")
+        process.stdin.write(f"{device_id}\n")
         process.stdin.write(f"{serial_port}\n")
         process.stdin.write(f"{baud_rate}\n")
         process.stdin.write(f"{endpoint}\n")

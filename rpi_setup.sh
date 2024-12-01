@@ -99,8 +99,8 @@ get_config_values() {
     print_status "Enter configuration values:"
     
     # Get Scale ID
-    read -p "Enter Scale ID: " SCALE_ID
-    if [ -z "$SCALE_ID" ]; then
+    read -p "Enter Scale ID: " DEVICE_ID
+    if [ -z "$DEVICE_ID" ]; then
         handle_error "Scale ID cannot be empty"
     fi
     
@@ -173,16 +173,6 @@ main() {
     bash /usr/local/bin/connect_to_wifi.sh -i wlan0 -s "$WIFI_SSID" -p "$WIFI_PASSWORD"
     bash /usr/local/bin/setup_wifi_connection.sh
     
-    # Create IoT configuration
-    print_status "Creating IoT configuration..."
-    cat > /etc/scale-reader/config.json << EOL
-{
-    "scale_id": "$SCALE_ID",
-    "serial_port": "$SERIAL_PORT",
-    "baud_rate": $BAUD_RATE,
-    "iot_endpoint": "$IOT_ENDPOINT"
-}
-EOL
     chmod 600 /etc/scale-reader/config.json
     
     # Set up Python virtual environment

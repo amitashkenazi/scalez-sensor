@@ -6,20 +6,20 @@ import os
 import argparse
 from botocore.exceptions import ClientError
 
-def provision_device(scale_id: str, output_dir: str, policy_name: str, stage: str):
+def provision_device(device_id: str, output_dir: str, policy_name: str, stage: str):
     """Provision a new device in AWS IoT"""
     iot = boto3.client('iot')
     
     try:
         # Create thing
-        thing_name = f"scale-{scale_id}"
+        thing_name = f"device-{device_id}"
         print(f"Creating thing: {thing_name}")
         iot.create_thing(
             thingName=thing_name,
             attributePayload={
                 'attributes': {
                     'type': 'scale',
-                    'scale_id': scale_id
+                    'device_id': device_id
                 }
             }
         )
@@ -58,18 +58,19 @@ def provision_device(scale_id: str, output_dir: str, policy_name: str, stage: st
          
         # Save configuration
         config = {
-            'scale_id': scale_id,
+            'device_id': device_id,
             'serial_port': '/dev/ttyUSB0',
             'baud_rate': 1200,
             'iot_endpoint': iot.describe_endpoint(endpointType='iot:Data-ATS')['endpointAddress'],
             'stage': stage
 
         }
+        print(f"config: {config}")
         
         with open(f"{output_dir}/config.json", 'w') as f:
             json.dump(config, f, indent=2)
         
-        print(f"\n✅ Device {scale_id} provisioned successfully!")
+        print(f"\n✅ Device {device_id} provisioned successfully!")
         print(f"Certificates saved in: {output_dir}")
         print(f"Configuration saved as: {output_dir}/config.json")
         
@@ -79,16 +80,16 @@ def provision_device(scale_id: str, output_dir: str, policy_name: str, stage: st
 
 def main():
     parser = argparse.ArgumentParser(description='Provision a new device in AWS IoT')
-    parser.add_argument('--scale-id', required=True, help='Scale ID (UUID)')
+    parser.add_argument('--device-id', required=True, help='Scale ID (UUID)')
     parser.add_argument('--output-dir', default='./certs',
                        help='Directory to store certificates')
     parser.add_argument('--policy-name', default='scale-management-system-scale-policy-dev',
                        help='IoT policy name to attach')
     parser.add_argument('--stage', default='dev',
-                       help='Deployment stage'
+                       help='Deployment stage')
     
     args = parser.parse_args()
-    provision_device(args.scale_id, args.output_dir, args.policy_name, args.stage)
+    provision_device(args.device_id, args.output_dir, args.policy_name, args.stage)
 
 if __name__ == '__main__':
     main()

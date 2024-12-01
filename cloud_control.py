@@ -34,8 +34,8 @@ def setup_logging():
 class CloudControl:
     def __init__(self):
         self.config = self._load_config()
-        self.scale_id = self.config['scale_id']
-        self.client_id = f"scale-{self.scale_id}"
+        self.device_id = self.config['device_id']
+        self.client_id = f"device-{self.device_id}"
         self._verify_certificates()
         self.mqtt = self._create_mqtt_client()
         
@@ -48,7 +48,7 @@ class CloudControl:
             with open(CONFIG_PATH, 'r') as f:
                 config = json.load(f)
             
-            required_fields = ['scale_id', 'iot_endpoint']
+            required_fields = ['device_id', 'iot_endpoint']
             missing = [field for field in required_fields if field not in config]
             
             if missing:
@@ -129,7 +129,7 @@ class CloudControl:
             
             # Update crontab
             result = subprocess.run(
-                ['/usr/local/bin/scale-interval', str(minutes)],
+                ['/usr/local/bin/device-interval', str(minutes)],
                 capture_output=True,
                 text=True
             )
@@ -157,7 +157,7 @@ class CloudControl:
         """Publish status update to AWS IoT"""
         try:
             status_data.update({
-                'scale_id': self.scale_id,
+                'device_id': self.device_id,
                 'timestamp': datetime.utcnow().isoformat() + 'Z'
             })
             
@@ -181,12 +181,12 @@ class CloudControl:
                 
                 # Subscribe to commands
                 subscribe_future, _ = self.mqtt.subscribe(
-                    topic=f"{COMMANDS_TOPIC}/{self.scale_id}",
+                    topic=f"{COMMANDS_TOPIC}/{self.device_id}",
                     qos=mqtt.QoS.AT_LEAST_ONCE,
                     callback=self.handle_command
                 )
                 subscribe_future.result(timeout=10)
-                logging.info(f"Subscribed to {COMMANDS_TOPIC}/{self.scale_id}")
+                logging.info(f"Subscribed to {COMMANDS_TOPIC}/{self.device_id}")
                 
                 # Main loop
                 while True:
