@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+from bluepy.btle import Scanner, DefaultDelegate
 from flask import Flask, jsonify, render_template, request, send_from_directory
 import subprocess
 import logging
@@ -57,11 +57,49 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 logging.getLogger().addHandler(console_handler)
 
+
+def setup_bluetooth():
+    """Initialize Bluetooth on Raspberry Pi"""
+    try:
+        # Reset bluetooth interface
+        subprocess.run(['sudo', 'hciconfig', 'hci0', 'down'], check=True)
+        time.sleep(1)
+        subprocess.run(['sudo', 'hciconfig', 'hci0', 'up'], check=True)
+        time.sleep(1)
+        # Set LE scan parameters
+        subprocess.run(['sudo', 'hciconfig', 'hci0', 'leadv', '0'], check=True)
+        subprocess.run(['sudo', 'hciconfig', 'hci0', 'noscan'], check=True)
+        time.sleep(1)
+        subprocess.run(['sudo', 'hciconfig', 'hci0', 'piscan'], check=True)
+        logging.info("Bluetooth interface reset and configured successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error resetting Bluetooth interface: {e}")
+        return False
+
+class ScanDelegate(DefaultDelegate):
+    def __init__(self):
+        DefaultDelegate.__init__(self)
+
+    def handleDiscovery(self, dev, isNewDev, isNewData):
+        if isNewDev:
+            logging.info(f"Discovered device {dev.addr}")
+
+    
 # Create Flask app
 app = Flask(__name__, 
     template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates'),
     static_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 )
+
+def set_config(config):
+    """Set scale configuration"""
+    try:
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(config, f)
+            logging.info(f"Configuration saved: {config}")
+    except Exception as e:
+        logging.error(f"Error saving configuration: {e}")
 
 def get_config() -> Dict[str, str]:
     """Get scale configuration"""
@@ -436,13 +474,17 @@ def install_services():
         
         # Get configuration parameters from request
         data = request.get_json()
+        logging.info(f"Received configuration data: {data}")
         if not data:
             log_to_window("No configuration data provided", "ERROR")
             return jsonify({
                 'success': False,
                 'message': 'No configuration data provided'
             })
-        
+        config = get_config()
+        config['connection_type'] = data.get('connection_type', 'rs232')
+        config['bluetooth_mac'] = data.get('bluetooth_mac', '00:00:00:00:00:00')
+        set_config(config)
         # Extract parameters with defaults
         device_id = data.get('device_id')
         if not device_id:
@@ -561,7 +603,7 @@ def get_installation_logs():
         except queue.Empty:
             break
     return jsonify({'logs': logs})
-    
+
 
 @app.route('/api/logs')
 def get_logs():
@@ -667,7 +709,108 @@ def get_measurements():
             'success': False,
             'error': str(e)
         })
+
+@app.route('/api/scan-bluetooth', methods=['GET'])
+def scan_bluetooth():
+    try:
+        # Setup Bluetooth first
+        if not setup_bluetooth():
+            return jsonify({
+                "success": False,
+                "message": "Failed to initialize Bluetooth interface"
+            })
+
+        # Create scanner with delegate
+        scanner = Scanner().withDelegate(ScanDelegate())
+        
+        # Perform scan
+        logging.info("Starting Bluetooth scan...")
+        devices = scanner.scan(10.0)  # Increase scan time to 10 seconds
+        
+        # Process results
+        device_list = []
+        for dev in devices:
+            device_info = {
+                "address": dev.addr,
+                "name": None,
+                "rssi": dev.rssi,
+                "scanData": []
+            }
             
+            # Get all scan data
+            for (adtype, desc, value) in dev.getScanData():
+                device_info["scanData"].append({
+                    "type": adtype,
+                    "desc": desc,
+                    "value": value
+                })
+                if desc == "Complete Local Name":
+                    device_info["name"] = value
+            
+            # Only attempt connection if no name found and it looks like a scale
+            if device_info["name"] is None:
+                try:
+                    from bluepy.btle import Peripheral, BTLEDisconnectError
+                    import socket
+                    
+                    # Set socket timeout
+                    socket.setdefaulttimeout(3)
+                    
+                    # Attempt connection with timeout
+                    periph = Peripheral(dev.addr, timeout=3)
+                    try:
+                        chars = periph.getCharacteristics(uuid=0x2A00)
+                        if chars:
+                            device_info["name"] = chars[0].read().decode()
+                    except (BTLEDisconnectError, AttributeError) as e:
+                        logging.debug(f"Could not read characteristic from {dev.addr}: {e}")
+                    finally:
+                        try:
+                            periph.disconnect()
+                        except:
+                            pass
+                except Exception as e:
+                    logging.debug(f"Failed to connect to {dev.addr}: {e}")
+            
+            device_list.append(device_info)
+        
+        # Filter for likely scale devices (SH2492) but also include devices
+        # that might be scales based on other characteristics
+        scale_devices = []
+        for device in device_list:
+            is_scale = False
+            
+            # Check name for scale indicators
+            if device["name"] and any(indicator in device["name"].upper() 
+                                    for indicator in ["SH2492", "SCALE", "WEIGHT"]):
+                is_scale = True
+                
+            # Check manufacturer data
+            for scan_data in device["scanData"]:
+                if scan_data["desc"] == "Manufacturer" and "2492" in scan_data["value"]:
+                    is_scale = True
+                    
+            if is_scale:
+                scale_devices.append({
+                    "address": device["address"],
+                    "name": device["name"] or "Unknown Scale Device",
+                    "rssi": device["rssi"]
+                })
+        
+        logging.info(f"Scan complete. Found {len(scale_devices)} potential scale devices")
+        
+        return jsonify({
+            "success": True,
+            "devices": scale_devices
+        })
+        
+    except Exception as e:
+        logging.error(f"Error during Bluetooth scan: {e}")
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        })
+                            
 if __name__ == '__main__':
     try:
         # Ensure log directory exists

@@ -37,4 +37,10 @@ upload the certs to the rpi from the wifi manager (from browser -> RPI IP)
 for checking the status of the serices:
 ```
 sudo systemctl status scale-reader
+sudo systemctl stop scale-reader
+sudo systemctl status wifi-manager
+journalctl -u scale-reader -f
+journalctl -u wifi-manager -f
+cat /etc/systemd/system/scale-reader.service
+cat /etc/systemd/system/wifi-manager.service
 ```
